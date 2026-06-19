@@ -8,7 +8,7 @@ st.set_page_config(page_title="GLOBAL Weekly Report Demo v2", page_icon="🗓️
 db.init_db()
 
 def get_user():
-    users=db.users(True)
+    users = db.get_users(True)
     if users.empty:
         st.error("沒有可用 Demo User。"); st.stop()
     emails=users["User_Email"].tolist()
