@@ -1,645 +1,1368 @@
-
-import sqlite3, random
+import sqlite3
 from pathlib import Path
 from datetime import datetime, date
-import pandas as pd
+import random
+import json
+from io import BytesIO
 
-DB_PATH = Path(__file__).parent / "global_weekly_report_demo.db"
+import pandas as pd
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+
+
+DB_NAME = "global_weekly_report_demo.db"
+DB_PATH = Path(__file__).parent / DB_NAME
+
+ROLES = ["Admin", "Manager", "Staff", "PD/PM", "Viewer"]
+
+PAGE_ORDER = [
+    "預算設定",
+    "日報輸入",
+    "週報輸入",
+    "自由彙整",
+    "自動彙整 Dashboard",
+    "缺漏週報",
+    "匯出 Excel",
+    "Master Data",
+    "User Management",
+    "Admin Data Maintenance",
+    "Admin Config Import / Export",
+]
 
 STAFF_SEED = [
-    ("小李","機械設計","Engineer",1),("張三","電氣","Engineer",1),("王四","組立","Engineer",1),
-    ("JOHN","CS","Engineer",1),("鈴木","營業","PD/PM",1),("大島","機械設計","Engineer",1),
-    ("MIKE","電氣","Engineer",1),("MERRY","組立","Engineer",1),("MAX","CS","Engineer",1),
-    ("JAME","營業","PD/PM",1),("大河","機械設計","Engineer",1),("吾郎","電氣","Engineer",1),
-    ("人傑","組立","Engineer",1),("大勇","CS","Engineer",1)
+    ("小李", "機械設計", "Engineer", 1),
+    ("張三", "電氣", "Engineer", 1),
+    ("王四", "組立", "Engineer", 1),
+    ("JOHN", "CS", "Engineer", 1),
+    ("鈴木", "營業", "PD/PM", 1),
+    ("大島", "機械設計", "Engineer", 1),
+    ("MIKE", "電氣", "Engineer", 1),
+    ("MERRY", "組立", "Engineer", 1),
+    ("MAX", "CS", "Engineer", 1),
+    ("JAME", "營業", "PD/PM", 1),
+    ("大河", "機械設計", "Engineer", 1),
+    ("吾郎", "電氣", "Engineer", 1),
+    ("人傑", "組立", "Engineer", 1),
+    ("大勇", "CS", "Engineer", 1),
 ]
-MASTER_LIST_SEED = {
-    "Department":["機械設計","電氣","組立","CS","營業"],
-    "Product_Line":["OWLS-1800","OWLS-2200","OCSS-600","OTFC-1800","T"],
-    "Platform_Line":["機械設計","電氣","組立","CS","營業"],
-    "Work_Category":["定例會議","資料彙整","設計","組立","調適","現場異常","異常分析"],
-    "Health":["Green","Yellow","Red"],
-    "Status":["Active","Hold","Closed"],
-    "Role":["Admin","Manager","Staff","PD/PM","Viewer"],
-}
-DEFAULT_COST_IDS = ["W0001","W0002","W0003","W0004","A0011","A0012"]
-DEFAULT_USERS = [
-    ("admin@demo.com","小李","機械設計","Admin",1),
-    ("manager@demo.com","張三","電氣","Manager",1),
-    ("staff@demo.com","王四","組立","Staff",1),
-    ("pdpm@demo.com","鈴木","營業","PD/PM",1),
-    ("viewer@demo.com","JOHN","CS","Viewer",1),
-]
-PAGE_ORDER = ["預算設定","日報輸入","週報輸入","自由彙整","自動彙整 Dashboard","缺漏週報","匯出 Excel","Master Data","User Management","Admin Data Maintenance"]
 
-def conn():
-    c = sqlite3.connect(DB_PATH)
-    c.row_factory = sqlite3.Row
-    return c
+MASTER_LIST_SEED = {
+    "Department": ["機械設計", "電氣", "組立", "CS", "營業"],
+    "Product_Line": ["OWLS-1800", "OWLS-2200", "OCSS-600", "OTFC-1800", "T"],
+    "Platform_Line": ["機械設計", "電氣", "組立", "CS", "營業"],
+    "Work_Category": ["定例會議", "資料彙整", "設計", "組立", "調適", "現場異常", "異常分析"],
+    "Health": ["Green", "Yellow", "Red"],
+    "Status": ["Active", "Hold", "Closed"],
+    "Role": ROLES,
+}
+
+DEFAULT_USERS = [
+    ("admin@demo.com", "小李", "機械設計", "Admin", 1),
+    ("manager@demo.com", "張三", "電氣", "Manager", 1),
+    ("staff@demo.com", "王四", "組立", "Staff", 1),
+    ("pdpm@demo.com", "鈴木", "營業", "PD/PM", 1),
+    ("viewer@demo.com", "JOHN", "CS", "Viewer", 1),
+]
+
+DEFAULT_COST_IDS = ["W0001", "W0002", "W0003", "W0004", "A0011", "A0012"]
+
+
+def get_connection():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def execute(sql, params=None):
+    with get_connection() as conn:
+        conn.execute(sql, params or [])
+        conn.commit()
+
+
+def query_df(sql, params=None):
+    with get_connection() as conn:
+        return pd.read_sql_query(sql, conn, params=params or [])
+
 
 def now():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-def qdf(sql, params=None):
-    with conn() as c:
-        return pd.read_sql_query(sql, c, params=params or [])
 
-def execute(sql, params=None):
-    with conn() as c:
-        c.execute(sql, params or [])
-        c.commit()
-
-def col_exists(c, table, col):
-    return any(r[1] == col for r in c.execute(f"PRAGMA table_info({table})").fetchall())
-
-def add_col(c, table, definition):
-    col = definition.split()[0]
-    if not col_exists(c, table, col):
-        c.execute(f"ALTER TABLE {table} ADD COLUMN {definition}")
-
-def init_db():
-    with conn() as c:
-        cur = c.cursor()
-        cur.execute("""CREATE TABLE IF NOT EXISTS staff_master(
-            Staff_Name TEXT PRIMARY KEY, Department TEXT NOT NULL, Role TEXT, Active_Flag INTEGER DEFAULT 1)""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS master_lists(
-            List_Type TEXT NOT NULL, List_Value TEXT NOT NULL, Active_Flag INTEGER DEFAULT 1,
-            PRIMARY KEY(List_Type,List_Value))""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS project_budget_master(
-            Opportunity_ID TEXT, Cost_Tracking_ID TEXT PRIMARY KEY, Customer TEXT NOT NULL,
-            Project_Name TEXT NOT NULL, Product_Line TEXT NOT NULL, Platform_Line TEXT NOT NULL,
-            Budget_Hours REAL NOT NULL, Sales_Estimated_Hours REAL NOT NULL, Owner TEXT,
-            Status TEXT NOT NULL DEFAULT 'Active', Created_At TEXT, Updated_At TEXT)""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS daily_worklog(
-            Worklog_ID TEXT PRIMARY KEY, Work_Date TEXT NOT NULL, Report_Week TEXT NOT NULL,
-            Staff_Name TEXT NOT NULL, Department TEXT NOT NULL, Cost_Tracking_ID TEXT NOT NULL,
-            Work_Category TEXT NOT NULL, Hours REAL NOT NULL, Work_Content TEXT NOT NULL,
-            Product_Line TEXT, Platform_Line TEXT, Created_At TEXT)""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS weekly_summary_input(
-            Weekly_Input_ID TEXT PRIMARY KEY, Report_Week TEXT NOT NULL, Staff_Name TEXT NOT NULL,
-            Cost_Tracking_ID TEXT NOT NULL, Weekly_Summary TEXT NOT NULL, Next_Week_Target TEXT NOT NULL,
-            Health TEXT NOT NULL, Created_At TEXT, Updated_At TEXT,
-            UNIQUE(Report_Week,Staff_Name,Cost_Tracking_ID))""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS weekly_report_log(
-            Report_Week TEXT NOT NULL, Staff_Name TEXT NOT NULL, Department TEXT NOT NULL,
-            Cost_Tracking_ID TEXT NOT NULL, Customer TEXT, Project_Name TEXT, Product_Line TEXT,
-            Platform_Line TEXT, Weekly_Total_Hours REAL, Daily_Work_Detail TEXT, Work_Category_Summary TEXT,
-            Weekly_Summary TEXT, Next_Week_Target TEXT, Health TEXT, Submit_Status TEXT, Updated_At TEXT,
-            PRIMARY KEY(Report_Week,Staff_Name,Cost_Tracking_ID))""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS user_master(
-            User_Email TEXT PRIMARY KEY, Staff_Name TEXT, Department TEXT, Role TEXT NOT NULL,
-            Active_Flag INTEGER DEFAULT 1, Created_At TEXT, Updated_At TEXT)""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS role_permission(
-            Role TEXT NOT NULL, Page_Name TEXT NOT NULL, Can_View INTEGER DEFAULT 0,
-            Can_Edit INTEGER DEFAULT 0, Can_Export INTEGER DEFAULT 0, PRIMARY KEY(Role,Page_Name))""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS audit_log(
-            Audit_ID TEXT PRIMARY KEY, User_Email TEXT, Action_Type TEXT, Table_Name TEXT,
-            Record_Key TEXT, Old_Value TEXT, New_Value TEXT, Created_At TEXT)""")
-        for table, defs in {
-            "project_budget_master":["Created_By TEXT","Updated_By TEXT"],
-            "daily_worklog":["Created_By TEXT"],
-            "weekly_summary_input":["Created_By TEXT","Updated_By TEXT"],
-        }.items():
-            for d in defs: add_col(c, table, d)
-        c.commit()
-    seed_master_data(); seed_project_budget_master(); seed_users_permissions()
-
-def seed_master_data():
-    with conn() as c:
-        if c.execute("SELECT COUNT(*) FROM staff_master").fetchone()[0] == 0:
-            c.executemany("INSERT INTO staff_master VALUES(?,?,?,?)", STAFF_SEED)
-        c.execute("UPDATE staff_master SET Role='PD/PM' WHERE Role='Sales'")
-        for lt, vals in MASTER_LIST_SEED.items():
-            for v in vals:
-                c.execute("INSERT OR IGNORE INTO master_lists VALUES(?,?,1)", [lt, v])
-        c.execute("UPDATE master_lists SET List_Value='PD/PM' WHERE List_Type='Role' AND List_Value='Sales'")
-        c.commit()
-
-def seed_project_budget_master():
-    with conn() as c:
-        if c.execute("SELECT COUNT(*) FROM project_budget_master").fetchone()[0] > 0: return
-        products = [r[0] for r in c.execute("SELECT List_Value FROM master_lists WHERE List_Type='Product_Line'").fetchall()]
-        platforms = [r[0] for r in c.execute("SELECT List_Value FROM master_lists WHERE List_Type='Platform_Line'").fetchall()]
-        owners = [r[0] for r in c.execute("SELECT Staff_Name FROM staff_master WHERE Role='PD/PM' AND Active_Flag=1").fetchall()] or ["鈴木"]
-        rows=[]
-        for i,cid in enumerate(DEFAULT_COST_IDS,1):
-            b=random.choice([50,100,150,200,300])
-            rows.append((f"OPP-2026-{i:03d}",cid,f"DEMO Customer {chr(64+i)}",f"DEMO Project {cid}",
-                         random.choice(products),random.choice(platforms),b,round(b*random.uniform(.8,1.2),1),
-                         random.choice(owners),"Active",now(),now(),"system","system"))
-        c.executemany("""INSERT INTO project_budget_master(
-            Opportunity_ID,Cost_Tracking_ID,Customer,Project_Name,Product_Line,Platform_Line,
-            Budget_Hours,Sales_Estimated_Hours,Owner,Status,Created_At,Updated_At,Created_By,Updated_By)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", rows)
-        c.commit()
-
-def seed_users_permissions():
-    n=now()
-    with conn() as c:
-        c.execute("UPDATE user_master SET Role='PD/PM' WHERE Role='Sales'")
-        for u in DEFAULT_USERS:
-            c.execute("""INSERT OR IGNORE INTO user_master(User_Email,Staff_Name,Department,Role,Active_Flag,Created_At,Updated_At)
-                         VALUES(?,?,?,?,?,?,?)""", [*u,n,n])
-        c.execute("DELETE FROM role_permission")
-        p = {
-            "Admin": {pg:(1,1,1) for pg in PAGE_ORDER},
-            "Manager": {"日報輸入":(1,1,0),"週報輸入":(1,1,0),"自由彙整":(1,0,1),"自動彙整 Dashboard":(1,0,1),"缺漏週報":(1,0,1),"匯出 Excel":(1,0,1)},
-            "Staff": {"日報輸入":(1,1,0),"週報輸入":(1,1,0),"自由彙整":(1,0,1),"自動彙整 Dashboard":(1,0,0),"缺漏週報":(1,0,0),"匯出 Excel":(1,0,1)},
-            "PD/PM": {"預算設定":(1,1,1),"日報輸入":(1,1,0),"週報輸入":(1,1,0),"自由彙整":(1,0,1),"自動彙整 Dashboard":(1,0,1),"缺漏週報":(1,0,1),"匯出 Excel":(1,0,1)},
-            "Viewer": {"自動彙整 Dashboard":(1,0,0)}
-        }
-        for role,pages in p.items():
-            for pg,(v,e,x) in pages.items():
-                c.execute("INSERT INTO role_permission VALUES(?,?,?,?,?)",[role,pg,v,e,x])
-        c.commit()
-
-def get_current_week(d=None):
-    d = d or date.today()
-    if isinstance(d,str): d=datetime.strptime(d,"%Y-%m-%d").date()
-    iso=d.isocalendar()
+def get_current_week(input_date=None):
+    if input_date is None:
+        input_date = date.today()
+    if isinstance(input_date, str):
+        input_date = datetime.strptime(input_date[:10], "%Y-%m-%d").date()
+    iso = input_date.isocalendar()
     return f"{iso.year}-W{iso.week:02d}"
 
-def gen_id(prefix, table, col):
-    y=datetime.now().year; pat=f"{prefix}-{y}-%"
-    with conn() as c:
-        r=c.execute(f"SELECT {col} FROM {table} WHERE {col} LIKE ? ORDER BY {col} DESC LIMIT 1",[pat]).fetchone()
-    n=1 if not r else int(str(r[0]).split("-")[-1])+1
-    return f"{prefix}-{y}-{n:06d}"
 
-def audit(action, table, key, old="", new="", user="system"):
-    execute("INSERT INTO audit_log VALUES(?,?,?,?,?,?,?,?)",
-            [gen_id("AUD","audit_log","Audit_ID"),user,action,table,key,str(old),str(new),now()])
+def _column_exists(conn, table_name, column_name):
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return any(row[1] == column_name for row in rows)
 
-def master_values(t):
-    df=qdf("SELECT List_Value FROM master_lists WHERE List_Type=? AND Active_Flag=1 ORDER BY List_Value",[t])
+
+def _safe_add_column(conn, table_name, column_definition):
+    column_name = column_definition.split()[0]
+    if not _column_exists(conn, table_name, column_name):
+        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_definition}")
+
+
+def init_db():
+    with get_connection() as conn:
+        c = conn.cursor()
+
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS staff_master (
+            Staff_Name TEXT PRIMARY KEY,
+            Department TEXT NOT NULL,
+            Role TEXT,
+            Active_Flag INTEGER DEFAULT 1
+        )
+        """)
+
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS master_lists (
+            List_Type TEXT NOT NULL,
+            List_Value TEXT NOT NULL,
+            Active_Flag INTEGER DEFAULT 1,
+            PRIMARY KEY (List_Type, List_Value)
+        )
+        """)
+
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS project_budget_master (
+            Opportunity_ID TEXT,
+            Cost_Tracking_ID TEXT PRIMARY KEY,
+            Customer TEXT NOT NULL,
+            Project_Name TEXT NOT NULL,
+            Product_Line TEXT NOT NULL,
+            Platform_Line TEXT NOT NULL,
+            Budget_Hours REAL NOT NULL,
+            Sales_Estimated_Hours REAL NOT NULL,
+            Owner TEXT,
+            Status TEXT NOT NULL DEFAULT 'Active',
+            Created_At TEXT,
+            Updated_At TEXT,
+            Created_By TEXT,
+            Updated_By TEXT
+        )
+        """)
+
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS daily_worklog (
+            Worklog_ID TEXT PRIMARY KEY,
+            Work_Date TEXT NOT NULL,
+            Report_Week TEXT NOT NULL,
+            Staff_Name TEXT NOT NULL,
+            Department TEXT NOT NULL,
+            Cost_Tracking_ID TEXT NOT NULL,
+            Work_Category TEXT NOT NULL,
+            Hours REAL NOT NULL,
+            Work_Content TEXT NOT NULL,
+            Product_Line TEXT,
+            Platform_Line TEXT,
+            Created_At TEXT,
+            Created_By TEXT
+        )
+        """)
+
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS weekly_summary_input (
+            Weekly_Input_ID TEXT PRIMARY KEY,
+            Report_Week TEXT NOT NULL,
+            Staff_Name TEXT NOT NULL,
+            Cost_Tracking_ID TEXT NOT NULL,
+            Weekly_Summary TEXT NOT NULL,
+            Next_Week_Target TEXT NOT NULL,
+            Health TEXT NOT NULL,
+            Created_At TEXT,
+            Updated_At TEXT,
+            Created_By TEXT,
+            Updated_By TEXT,
+            UNIQUE (Report_Week, Staff_Name, Cost_Tracking_ID)
+        )
+        """)
+
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS weekly_report_log (
+            Report_Week TEXT NOT NULL,
+            Staff_Name TEXT NOT NULL,
+            Department TEXT NOT NULL,
+            Cost_Tracking_ID TEXT NOT NULL,
+            Customer TEXT,
+            Project_Name TEXT,
+            Product_Line TEXT,
+            Platform_Line TEXT,
+            Weekly_Total_Hours REAL,
+            Daily_Work_Detail TEXT,
+            Work_Category_Summary TEXT,
+            Weekly_Summary TEXT,
+            Next_Week_Target TEXT,
+            Health TEXT,
+            Submit_Status TEXT,
+            Updated_At TEXT,
+            PRIMARY KEY (Report_Week, Staff_Name, Cost_Tracking_ID)
+        )
+        """)
+
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS user_master (
+            User_Email TEXT PRIMARY KEY,
+            Staff_Name TEXT,
+            Department TEXT,
+            Role TEXT NOT NULL,
+            Active_Flag INTEGER DEFAULT 1,
+            Created_At TEXT,
+            Updated_At TEXT
+        )
+        """)
+
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS role_permission (
+            Role TEXT NOT NULL,
+            Page_Name TEXT NOT NULL,
+            Can_View INTEGER DEFAULT 0,
+            Can_Edit INTEGER DEFAULT 0,
+            Can_Export INTEGER DEFAULT 0,
+            PRIMARY KEY (Role, Page_Name)
+        )
+        """)
+
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS audit_log (
+            Audit_ID TEXT PRIMARY KEY,
+            User_Email TEXT,
+            Action_Type TEXT,
+            Table_Name TEXT,
+            Record_Key TEXT,
+            Old_Value TEXT,
+            New_Value TEXT,
+            Created_At TEXT
+        )
+        """)
+
+        for table, columns in {
+            "project_budget_master": ["Created_By TEXT", "Updated_By TEXT"],
+            "daily_worklog": ["Created_By TEXT"],
+            "weekly_summary_input": ["Created_By TEXT", "Updated_By TEXT"],
+        }.items():
+            for col in columns:
+                _safe_add_column(conn, table, col)
+
+        conn.commit()
+
+    seed_master_data()
+    seed_users_and_permissions()
+    seed_project_budget_master()
+
+
+def seed_master_data():
+    with get_connection() as conn:
+        c = conn.cursor()
+
+        if c.execute("SELECT COUNT(*) FROM staff_master").fetchone()[0] == 0:
+            c.executemany("""
+                INSERT INTO staff_master (Staff_Name, Department, Role, Active_Flag)
+                VALUES (?, ?, ?, ?)
+            """, STAFF_SEED)
+
+        c.execute("UPDATE staff_master SET Role='PD/PM' WHERE Role='Sales'")
+
+        for list_type, values in MASTER_LIST_SEED.items():
+            for value in values:
+                c.execute("""
+                    INSERT OR IGNORE INTO master_lists (List_Type, List_Value, Active_Flag)
+                    VALUES (?, ?, 1)
+                """, [list_type, value])
+
+        c.execute("UPDATE master_lists SET List_Value='PD/PM' WHERE List_Type='Role' AND List_Value='Sales'")
+        conn.commit()
+
+
+def seed_users_and_permissions():
+    n = now()
+    with get_connection() as conn:
+        c = conn.cursor()
+
+        for email, staff, dept, role, active in DEFAULT_USERS:
+            c.execute("""
+                INSERT OR IGNORE INTO user_master
+                (User_Email, Staff_Name, Department, Role, Active_Flag, Created_At, Updated_At)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, [email, staff, dept, role, active, n, n])
+
+        if c.execute("SELECT COUNT(*) FROM role_permission").fetchone()[0] == 0:
+            reset_default_permissions(conn)
+
+        conn.commit()
+
+
+def reset_default_permissions(conn=None):
+    own_conn = conn is None
+    if own_conn:
+        conn = get_connection()
+    c = conn.cursor()
+    c.execute("DELETE FROM role_permission")
+
+    permissions = {
+        "Admin": {
+            "預算設定": (1, 1, 1),
+            "日報輸入": (1, 1, 0),
+            "週報輸入": (1, 1, 0),
+            "自由彙整": (1, 0, 1),
+            "自動彙整 Dashboard": (1, 0, 1),
+            "缺漏週報": (1, 0, 1),
+            "匯出 Excel": (1, 0, 1),
+            "Master Data": (1, 1, 1),
+            "User Management": (1, 1, 1),
+            "Admin Data Maintenance": (1, 1, 1),
+            "Admin Config Import / Export": (1, 1, 1),
+        },
+        "Manager": {
+            "日報輸入": (1, 1, 0),
+            "週報輸入": (1, 1, 0),
+            "自由彙整": (1, 0, 1),
+            "自動彙整 Dashboard": (1, 0, 1),
+            "缺漏週報": (1, 0, 1),
+            "匯出 Excel": (1, 0, 1),
+        },
+        "Staff": {
+            "日報輸入": (1, 1, 0),
+            "週報輸入": (1, 1, 0),
+            "自由彙整": (1, 0, 1),
+            "自動彙整 Dashboard": (1, 0, 0),
+            "缺漏週報": (1, 0, 0),
+            "匯出 Excel": (1, 0, 1),
+        },
+        "PD/PM": {
+            "預算設定": (1, 1, 1),
+            "日報輸入": (1, 1, 0),
+            "週報輸入": (1, 1, 0),
+            "自由彙整": (1, 0, 1),
+            "自動彙整 Dashboard": (1, 0, 1),
+            "缺漏週報": (1, 0, 1),
+            "匯出 Excel": (1, 0, 1),
+        },
+        "Viewer": {
+            "自動彙整 Dashboard": (1, 0, 0),
+        },
+    }
+
+    for role, pages in permissions.items():
+        for page, flags in pages.items():
+            c.execute("""
+                INSERT INTO role_permission (Role, Page_Name, Can_View, Can_Edit, Can_Export)
+                VALUES (?, ?, ?, ?, ?)
+            """, [role, page, flags[0], flags[1], flags[2]])
+    if own_conn:
+        conn.commit()
+        conn.close()
+
+
+def seed_project_budget_master():
+    with get_connection() as conn:
+        c = conn.cursor()
+        if c.execute("SELECT COUNT(*) FROM project_budget_master").fetchone()[0] > 0:
+            return
+
+        customers = [f"DEMO Customer {x}" for x in ["A", "B", "C", "D", "E", "F"]]
+        product_lines = get_master_values("Product_Line")
+        platform_lines = get_master_values("Platform_Line")
+        pdpm_names = query_df("SELECT Staff_Name FROM staff_master WHERE Role='PD/PM' AND Active_Flag=1")["Staff_Name"].tolist()
+        staff_names = query_df("SELECT Staff_Name FROM staff_master WHERE Active_Flag=1")["Staff_Name"].tolist()
+        owners = pdpm_names or staff_names
+        budgets = [50, 100, 150, 200, 300]
+        n = now()
+
+        rows = []
+        for idx, cost_id in enumerate(DEFAULT_COST_IDS, 1):
+            budget = random.choice(budgets)
+            rows.append([
+                f"OPP-2026-{idx:03d}",
+                cost_id,
+                random.choice(customers),
+                f"DEMO Project {cost_id}",
+                random.choice(product_lines),
+                random.choice(platform_lines),
+                budget,
+                round(budget * random.uniform(0.8, 1.2), 1),
+                random.choice(owners),
+                "Active",
+                n,
+                n,
+                "system",
+                "system",
+            ])
+
+        c.executemany("""
+            INSERT INTO project_budget_master (
+                Opportunity_ID, Cost_Tracking_ID, Customer, Project_Name, Product_Line,
+                Platform_Line, Budget_Hours, Sales_Estimated_Hours, Owner, Status,
+                Created_At, Updated_At, Created_By, Updated_By
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, rows)
+        conn.commit()
+
+
+def generate_id(prefix, table_name, id_col):
+    year = datetime.now().year
+    pattern = f"{prefix}-{year}-%"
+    with get_connection() as conn:
+        row = conn.execute(
+            f"SELECT {id_col} FROM {table_name} WHERE {id_col} LIKE ? ORDER BY {id_col} DESC LIMIT 1",
+            [pattern],
+        ).fetchone()
+    if row is None:
+        next_num = 1
+    else:
+        try:
+            next_num = int(row[0].split("-")[-1]) + 1
+        except Exception:
+            next_num = 1
+    return f"{prefix}-{year}-{next_num:06d}"
+
+
+def audit(action_type, table_name, record_key, old_value="", new_value="", user_email="system"):
+    audit_id = generate_id("AUD", "audit_log", "Audit_ID")
+    execute("""
+        INSERT INTO audit_log (Audit_ID, User_Email, Action_Type, Table_Name, Record_Key, Old_Value, New_Value, Created_At)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, [
+        audit_id,
+        user_email,
+        action_type,
+        table_name,
+        str(record_key),
+        json.dumps(old_value, ensure_ascii=False, default=str) if not isinstance(old_value, str) else old_value,
+        json.dumps(new_value, ensure_ascii=False, default=str) if not isinstance(new_value, str) else new_value,
+        now(),
+    ])
+
+
+def get_master_values(list_type):
+    df = query_df("""
+        SELECT List_Value FROM master_lists
+        WHERE List_Type=? AND Active_Flag=1
+        ORDER BY List_Value
+    """, [list_type])
     return df["List_Value"].tolist() if not df.empty else []
 
-def staff(active=True):
-    sql="SELECT * FROM staff_master" + (" WHERE Active_Flag=1" if active else "") + " ORDER BY Staff_Name"
-    return qdf(sql)
 
-def users(active=True):
-    sql="SELECT * FROM user_master" + (" WHERE Active_Flag=1" if active else "") + " ORDER BY Role,User_Email"
-    return qdf(sql)
+def get_table(table_name):
+    allowed = {
+        "project_budget_master", "staff_master", "daily_worklog", "weekly_summary_input",
+        "weekly_report_log", "master_lists", "user_master", "role_permission", "audit_log"
+    }
+    if table_name not in allowed:
+        raise ValueError("Unsupported table")
+    return query_df(f"SELECT * FROM {table_name}")
 
-def user_by_email(email):
-    df=qdf("SELECT * FROM user_master WHERE User_Email=? AND Active_Flag=1",[email])
+
+def get_staff(active_only=True):
+    sql = "SELECT * FROM staff_master"
+    if active_only:
+        sql += " WHERE Active_Flag=1"
+    sql += " ORDER BY Staff_Name"
+    return query_df(sql)
+
+
+def get_users(active_only=True):
+    sql = "SELECT * FROM user_master"
+    if active_only:
+        sql += " WHERE Active_Flag=1"
+    sql += " ORDER BY Role, User_Email"
+    return query_df(sql)
+
+
+def get_user_by_email(email):
+    df = query_df("SELECT * FROM user_master WHERE User_Email=? AND Active_Flag=1", [email])
     return None if df.empty else df.iloc[0].to_dict()
 
-def allowed_pages(role):
-    df=qdf("""SELECT Page_Name FROM role_permission WHERE Role=? AND Can_View=1
-              ORDER BY CASE Page_Name WHEN '預算設定' THEN 1 WHEN '日報輸入' THEN 2 WHEN '週報輸入' THEN 3
-              WHEN '自由彙整' THEN 4 WHEN '自動彙整 Dashboard' THEN 5 WHEN '缺漏週報' THEN 6
-              WHEN '匯出 Excel' THEN 7 WHEN 'Master Data' THEN 8 WHEN 'User Management' THEN 9 ELSE 99 END""",[role])
-    return df["Page_Name"].tolist() if not df.empty else []
 
-def permission(role,page):
-    df=qdf("SELECT Can_View,Can_Edit,Can_Export FROM role_permission WHERE Role=? AND Page_Name=?",[role,page])
-    return {"Can_View":0,"Can_Edit":0,"Can_Export":0} if df.empty else {k:int(df.iloc[0][k]) for k in ["Can_View","Can_Edit","Can_Export"]}
+def get_allowed_pages(role):
+    df = query_df("""
+        SELECT Page_Name FROM role_permission
+        WHERE Role=? AND Can_View=1
+    """, [role])
+    pages = df["Page_Name"].tolist() if not df.empty else []
+    return [p for p in PAGE_ORDER if p in pages]
 
-def owned_cost_ids(staff_name):
-    df=qdf("SELECT Cost_Tracking_ID FROM project_budget_master WHERE Owner=? ORDER BY Cost_Tracking_ID",[staff_name])
+
+def get_permission(role, page_name):
+    df = query_df("""
+        SELECT Can_View, Can_Edit, Can_Export
+        FROM role_permission
+        WHERE Role=? AND Page_Name=?
+    """, [role, page_name])
+    if df.empty:
+        return {"Can_View": 0, "Can_Edit": 0, "Can_Export": 0}
+    row = df.iloc[0]
+    return {
+        "Can_View": int(row["Can_View"]),
+        "Can_Edit": int(row["Can_Edit"]),
+        "Can_Export": int(row["Can_Export"]),
+    }
+
+
+def get_owned_cost_ids(staff_name):
+    df = query_df("SELECT Cost_Tracking_ID FROM project_budget_master WHERE Owner=? ORDER BY Cost_Tracking_ID", [staff_name])
     return df["Cost_Tracking_ID"].tolist() if not df.empty else []
 
-def scope_project(df,u):
-    if df.empty or not u: return df
-    if u["Role"] in ["Admin","Viewer","Manager","Staff"]: return df
-    if u["Role"]=="PD/PM" and "Owner" in df.columns: return df[df["Owner"]==u["Staff_Name"]]
-    return df.iloc[0:0]
 
-def scope_weekly(df,u):
-    if df.empty or not u: return df
-    if u["Role"] in ["Admin","Viewer"]: return df
-    if u["Role"]=="Manager" and "Department" in df.columns: return df[df["Department"]==u["Department"]]
-    if u["Role"]=="Staff" and "Staff_Name" in df.columns: return df[df["Staff_Name"]==u["Staff_Name"]]
-    if u["Role"]=="PD/PM" and "Cost_Tracking_ID" in df.columns:
-        return df[df["Cost_Tracking_ID"].isin(owned_cost_ids(u["Staff_Name"]))]
-    return df.iloc[0:0]
-
-def active_cost_ids(u=None):
-    df=qdf("SELECT Cost_Tracking_ID,Owner FROM project_budget_master WHERE Status='Active' ORDER BY Cost_Tracking_ID")
-    if u: df=scope_project(df,u)
-    return df["Cost_Tracking_ID"].tolist() if not df.empty else []
-
-def project_budget_display(u=None): return scope_project(table("project_budget_master"),u) if u else table("project_budget_master")
-
-def upsert_budget(r,u=None):
-    if not r.get("Cost_Tracking_ID"): raise ValueError("Cost_Tracking_ID 不可為空。")
-    if not r.get("Customer"): raise ValueError("Customer 不可為空。")
-    if not r.get("Project_Name"): raise ValueError("Project_Name 不可為空。")
-    if float(r.get("Budget_Hours") or 0)<=0: raise ValueError("Budget_Hours 必須大於 0。")
-    user=u["User_Email"] if u else "system"; role=u["Role"] if u else "Admin"
-    with conn() as c:
-        ex=c.execute("SELECT * FROM project_budget_master WHERE Cost_Tracking_ID=?",[r["Cost_Tracking_ID"]]).fetchone()
-        if role=="PD/PM":
-            if ex and ex["Owner"]!=u["Staff_Name"]: raise PermissionError("PD/PM 只能修改自己 Owner 的 Cost_Tracking_ID。")
-            r["Owner"]=u["Staff_Name"]
-        sh = float(r.get("Sales_Estimated_Hours") or r["Budget_Hours"])
-        if ex:
-            c.execute("""UPDATE project_budget_master SET Opportunity_ID=?,Customer=?,Project_Name=?,Product_Line=?,Platform_Line=?,
-                         Budget_Hours=?,Sales_Estimated_Hours=?,Owner=?,Status=?,Updated_At=?,Updated_By=? WHERE Cost_Tracking_ID=?""",
-                      [r.get("Opportunity_ID"),r["Customer"],r["Project_Name"],r["Product_Line"],r["Platform_Line"],float(r["Budget_Hours"]),sh,r["Owner"],r["Status"],now(),user,r["Cost_Tracking_ID"]])
-            act="UPDATE"
-        else:
-            c.execute("""INSERT INTO project_budget_master VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                      [r.get("Opportunity_ID"),r["Cost_Tracking_ID"],r["Customer"],r["Project_Name"],r["Product_Line"],r["Platform_Line"],float(r["Budget_Hours"]),sh,r["Owner"],r["Status"],now(),now(),user,user])
-            act="INSERT"
-        c.commit()
-    audit(act,"project_budget_master",r["Cost_Tracking_ID"],"",r,user)
-
-def add_daily(work_date, staff_name, cid, cat, hours, content, u=None):
-    if u:
-        if u["Role"]=="Staff" and staff_name!=u["Staff_Name"]: raise PermissionError("Staff 只能替自己輸入日報。")
-        if u["Role"]=="Manager":
-            sdf=qdf("SELECT Department FROM staff_master WHERE Staff_Name=?",[staff_name])
-            if not sdf.empty and sdf.iloc[0]["Department"]!=u["Department"]: raise PermissionError("Manager 只能替本部門人員輸入資料。")
-        if u["Role"]=="PD/PM" and cid not in owned_cost_ids(u["Staff_Name"]): raise PermissionError("PD/PM 只能對自己 Owner 的 Cost_Tracking_ID 輸入資料。")
-    if float(hours)<=0: raise ValueError("工時不可為 0。")
-    if not content.strip(): raise ValueError("簡短內容不可為空。")
-    if len(content)>100: raise ValueError("簡短內容限制 100 字以內。")
-    sdf=qdf("SELECT * FROM staff_master WHERE Staff_Name=?",[staff_name])
-    pdf=qdf("SELECT * FROM project_budget_master WHERE Cost_Tracking_ID=?",[cid])
-    if sdf.empty: raise ValueError("人員不存在。")
-    if pdf.empty: raise ValueError("工番號不存在。")
-    wd=work_date.strftime("%Y-%m-%d") if hasattr(work_date,"strftime") else str(work_date)
-    rw=get_current_week(wd); wid=gen_id("WL","daily_worklog","Worklog_ID"); user=u["User_Email"] if u else "system"
-    execute("""INSERT INTO daily_worklog(Worklog_ID,Work_Date,Report_Week,Staff_Name,Department,Cost_Tracking_ID,Work_Category,Hours,Work_Content,Product_Line,Platform_Line,Created_At,Created_By)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            [wid,wd,rw,staff_name,sdf.iloc[0]["Department"],cid,cat,float(hours),content.strip(),pdf.iloc[0]["Product_Line"],pdf.iloc[0]["Platform_Line"],now(),user])
-    regen_weekly(rw,staff_name,cid); audit("INSERT","daily_worklog",wid,"",{"cid":cid,"hours":hours},user); return wid
-
-def upsert_weekly(rw,staff_name,cid,summary,target,health,u=None):
-    if u:
-        if u["Role"]=="Staff" and staff_name!=u["Staff_Name"]: raise PermissionError("Staff 只能替自己輸入週報。")
-        if u["Role"]=="PD/PM" and cid not in owned_cost_ids(u["Staff_Name"]): raise PermissionError("PD/PM 只能管理自己 Owner 的 Cost_Tracking_ID。")
-    if not summary.strip() or not target.strip(): raise ValueError("本週總結與下週目標不可為空。")
-    if len(summary)>500: raise ValueError("週報總結超過 500 字。")
-    if len(target)>500: raise ValueError("下週目標超過 500 字。")
-    user=u["User_Email"] if u else "system"; n=now()
-    with conn() as c:
-        ex=c.execute("SELECT Weekly_Input_ID FROM weekly_summary_input WHERE Report_Week=? AND Staff_Name=? AND Cost_Tracking_ID=?",[rw,staff_name,cid]).fetchone()
-        if ex:
-            wsi=ex[0]
-            c.execute("UPDATE weekly_summary_input SET Weekly_Summary=?,Next_Week_Target=?,Health=?,Updated_At=?,Updated_By=? WHERE Weekly_Input_ID=?",
-                      [summary.strip(),target.strip(),health,n,user,wsi]); act="UPDATE"
-        else:
-            wsi=gen_id("WSI","weekly_summary_input","Weekly_Input_ID")
-            c.execute("""INSERT INTO weekly_summary_input VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
-                      [wsi,rw,staff_name,cid,summary.strip(),target.strip(),health,n,n,user,user]); act="INSERT"
-        c.commit()
-    regen_weekly(rw,staff_name,cid); audit(act,"weekly_summary_input",wsi,"",{"rw":rw,"cid":cid},user); return wsi
-
-def regen_weekly(rw=None, staff_name=None, cid=None):
-    wh=[]; p=[]
-    if rw: wh.append("dw.Report_Week=?"); p.append(rw)
-    if staff_name: wh.append("dw.Staff_Name=?"); p.append(staff_name)
-    if cid: wh.append("dw.Cost_Tracking_ID=?"); p.append(cid)
-    ws="WHERE "+" AND ".join(wh) if wh else ""
-    base=qdf(f"""SELECT dw.Report_Week,dw.Staff_Name,dw.Department,dw.Cost_Tracking_ID,pb.Customer,pb.Project_Name,pb.Product_Line,pb.Platform_Line,SUM(dw.Hours) Weekly_Total_Hours
-                 FROM daily_worklog dw LEFT JOIN project_budget_master pb ON dw.Cost_Tracking_ID=pb.Cost_Tracking_ID {ws}
-                 GROUP BY dw.Report_Week,dw.Staff_Name,dw.Department,dw.Cost_Tracking_ID,pb.Customer,pb.Project_Name,pb.Product_Line,pb.Platform_Line""",p)
-    with conn() as c:
-        for _,r in base.iterrows():
-            det=qdf("""SELECT Work_Date,Work_Category,Hours,Work_Content FROM daily_worklog WHERE Report_Week=? AND Staff_Name=? AND Cost_Tracking_ID=? ORDER BY Work_Date,Created_At""",[r.Report_Week,r.Staff_Name,r.Cost_Tracking_ID])
-            detail="\n".join([f"{x.Work_Date} | {x.Work_Category} | {x.Hours}h | {x.Work_Content}" for _,x in det.iterrows()])
-            cat=qdf("""SELECT Work_Category,SUM(Hours) Hours FROM daily_worklog WHERE Report_Week=? AND Staff_Name=? AND Cost_Tracking_ID=? GROUP BY Work_Category""",[r.Report_Week,r.Staff_Name,r.Cost_Tracking_ID])
-            cats=" / ".join([f"{x.Work_Category}: {x.Hours}h" for _,x in cat.iterrows()])
-            summ=qdf("""SELECT Weekly_Summary,Next_Week_Target,Health FROM weekly_summary_input WHERE Report_Week=? AND Staff_Name=? AND Cost_Tracking_ID=?""",[r.Report_Week,r.Staff_Name,r.Cost_Tracking_ID])
-            if summ.empty: s=t=h=""; status="Missing Summary"
-            else: s=summ.iloc[0]["Weekly_Summary"]; t=summ.iloc[0]["Next_Week_Target"]; h=summ.iloc[0]["Health"]; status="Submitted"
-            c.execute("""INSERT INTO weekly_report_log VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                         ON CONFLICT(Report_Week,Staff_Name,Cost_Tracking_ID) DO UPDATE SET
-                         Department=excluded.Department,Customer=excluded.Customer,Project_Name=excluded.Project_Name,Product_Line=excluded.Product_Line,Platform_Line=excluded.Platform_Line,
-                         Weekly_Total_Hours=excluded.Weekly_Total_Hours,Daily_Work_Detail=excluded.Daily_Work_Detail,Work_Category_Summary=excluded.Work_Category_Summary,
-                         Weekly_Summary=excluded.Weekly_Summary,Next_Week_Target=excluded.Next_Week_Target,Health=excluded.Health,Submit_Status=excluded.Submit_Status,Updated_At=excluded.Updated_At""",
-                      [r.Report_Week,r.Staff_Name,r.Department,r.Cost_Tracking_ID,r.Customer,r.Project_Name,r.Product_Line,r.Platform_Line,float(r.Weekly_Total_Hours or 0),detail,cats,s,t,h,status,now()])
-        c.commit()
-
-def rebuild_weekly():
-    execute("DELETE FROM weekly_report_log"); regen_weekly()
-
-def week_options():
-    df=qdf("SELECT Report_Week FROM daily_worklog UNION SELECT Report_Week FROM weekly_summary_input ORDER BY Report_Week DESC")
-    opts=df["Report_Week"].tolist() if not df.empty else []
-    cw=get_current_week()
-    if cw not in opts: opts.insert(0,cw)
-    return opts
-
-def cost_ids_for_staff_week(staff_name,rw,u=None):
-    df=qdf("""SELECT DISTINCT dw.Cost_Tracking_ID,pb.Owner FROM daily_worklog dw LEFT JOIN project_budget_master pb ON dw.Cost_Tracking_ID=pb.Cost_Tracking_ID WHERE dw.Staff_Name=? AND dw.Report_Week=?""",[staff_name,rw])
-    if u and u["Role"]=="PD/PM": df=df[df["Owner"]==u["Staff_Name"]]
-    ids=df["Cost_Tracking_ID"].tolist() if not df.empty else []
-    return ids or active_cost_ids(u)
-
-def health(rate):
-    return "Green" if rate<.5 else "Yellow" if rate<=1 else "Red" if rate<=1.5 else "Critical" if rate<=2 else "Overrun"
-
-def project_summary(rw=None,u=None):
-    rw=rw or get_current_week()
-    df=qdf("""SELECT pb.Cost_Tracking_ID,pb.Customer,pb.Project_Name,pb.Product_Line,pb.Platform_Line,pb.Budget_Hours,pb.Sales_Estimated_Hours,
-              COALESCE(SUM(CASE WHEN dw.Report_Week=? THEN dw.Hours ELSE 0 END),0) Weekly_Hours,
-              COALESCE(SUM(dw.Hours),0) Cumulative_Hours,pb.Owner,pb.Status
-              FROM project_budget_master pb LEFT JOIN daily_worklog dw ON pb.Cost_Tracking_ID=dw.Cost_Tracking_ID
-              GROUP BY pb.Cost_Tracking_ID,pb.Customer,pb.Project_Name,pb.Product_Line,pb.Platform_Line,pb.Budget_Hours,pb.Sales_Estimated_Hours,pb.Owner,pb.Status ORDER BY pb.Cost_Tracking_ID""",[rw])
-    df=scope_project(df,u) if u else df
-    if df.empty: return df
-    df["Remaining_Hours"]=df["Budget_Hours"]-df["Cumulative_Hours"]
-    df["Budget_Burn_Rate"]=df.apply(lambda r:r.Cumulative_Hours/r.Budget_Hours if r.Budget_Hours else 0,axis=1)
-    df["Sales_Estimate_Burn_Rate"]=df.apply(lambda r:r.Cumulative_Hours/r.Sales_Estimated_Hours if r.Sales_Estimated_Hours else 0,axis=1)
-    df["Budget_Health"]=df["Budget_Burn_Rate"].apply(health)
+def scope_project_df(df, user):
+    if df.empty or not user:
+        return df
+    role = user["Role"]
+    if role in ["Admin", "Viewer"]:
+        return df
+    if role == "PD/PM":
+        return df[df["Owner"] == user["Staff_Name"]] if "Owner" in df.columns else df.iloc[0:0]
     return df
 
-def staff_weekly_summary(u=None):
-    df=qdf("""SELECT Report_Week,Staff_Name,Department,SUM(Weekly_Total_Hours) Total_Weekly_Hours,COUNT(DISTINCT Cost_Tracking_ID) Number_of_Cost_IDs,
-              SUM(CASE WHEN Submit_Status='Missing Summary' THEN 1 ELSE 0 END) Missing_Summary_Count
-              FROM weekly_report_log GROUP BY Report_Week,Staff_Name,Department ORDER BY Report_Week DESC,Staff_Name""")
-    return scope_weekly(df,u) if u else df
 
-def missing_summary(u=None):
-    df=qdf("""SELECT Report_Week,Staff_Name,Department,Cost_Tracking_ID,Customer,Project_Name,Weekly_Total_Hours,'Weekly Summary' Missing_Item,'Not Sent' Reminder_Status
-              FROM weekly_report_log WHERE Submit_Status='Missing Summary' ORDER BY Report_Week DESC,Staff_Name,Cost_Tracking_ID""")
-    return scope_weekly(df,u) if u else df
-
-def weekly_filtered(start=None,end=None,dept=None,staff_name=None,cid=None,u=None):
-    wh=[]; p=[]
-    if start: wh.append("Report_Week>=?"); p.append(start)
-    if end: wh.append("Report_Week<=?"); p.append(end)
-    if dept and dept!="ALL": wh.append("Department=?"); p.append(dept)
-    if staff_name and staff_name!="ALL": wh.append("Staff_Name=?"); p.append(staff_name)
-    if cid and cid!="ALL": wh.append("Cost_Tracking_ID=?"); p.append(cid)
-    ws="WHERE "+" AND ".join(wh) if wh else ""
-    df=qdf(f"""SELECT Report_Week,Staff_Name,Department,Cost_Tracking_ID,Customer,Project_Name,Product_Line,Platform_Line,Weekly_Total_Hours,Weekly_Summary,Next_Week_Target,Health,Submit_Status
-              FROM weekly_report_log {ws} ORDER BY Report_Week DESC,Staff_Name,Cost_Tracking_ID""",p)
-    return scope_weekly(df,u) if u else df
-
-def table(name):
-    allowed={"project_budget_master","staff_master","daily_worklog","weekly_summary_input","weekly_report_log","master_lists","user_master","role_permission","audit_log"}
-    if name not in allowed: raise ValueError("Unsupported table")
-    return qdf(f"SELECT * FROM {name}")
-
-def add_master_value(lt,val,u=None):
-    if not lt or not val: raise ValueError("List_Type 與 List_Value 不可為空。")
-    execute("INSERT OR IGNORE INTO master_lists VALUES(?,?,1)",[lt,val.strip()])
-    audit("INSERT_OR_IGNORE","master_lists",f"{lt}:{val}","","",u["User_Email"] if u else "system")
-
-def upsert_staff(staff_name,dept,role="Engineer",active=1,u=None):
-    if not staff_name or not dept: raise ValueError("Staff_Name 與 Department 不可為空。")
-    execute("""INSERT INTO staff_master VALUES(?,?,?,?) ON CONFLICT(Staff_Name) DO UPDATE SET Department=excluded.Department,Role=excluded.Role,Active_Flag=excluded.Active_Flag""",
-            [staff_name.strip(),dept,role,int(active)])
-    audit("UPSERT","staff_master",staff_name,"","",u["User_Email"] if u else "system")
-
-def upsert_user(email,staff_name,dept,role,active=1,u=None):
-    if not email: raise ValueError("User_Email 不可為空。")
-    if role not in ["Admin","Manager","Staff","PD/PM","Viewer"]: raise ValueError("Role 必須是 Admin / Manager / Staff / PD/PM / Viewer。")
-    n=now()
-    execute("""INSERT INTO user_master VALUES(?,?,?,?,?,?,?) ON CONFLICT(User_Email) DO UPDATE SET Staff_Name=excluded.Staff_Name,Department=excluded.Department,Role=excluded.Role,Active_Flag=excluded.Active_Flag,Updated_At=excluded.Updated_At""",
-            [email.strip(),staff_name,dept,role,int(active),n,n])
-    audit("UPSERT","user_master",email,"",{"role":role},u["User_Email"] if u else "system")
+def scope_weekly_df(df, user):
+    if df.empty or not user:
+        return df
+    role = user["Role"]
+    if role in ["Admin", "Viewer"]:
+        return df
+    if role == "Manager" and "Department" in df.columns:
+        return df[df["Department"] == user["Department"]]
+    if role == "Staff" and "Staff_Name" in df.columns:
+        return df[df["Staff_Name"] == user["Staff_Name"]]
+    if role == "PD/PM" and "Cost_Tracking_ID" in df.columns:
+        return df[df["Cost_Tracking_ID"].isin(get_owned_cost_ids(user["Staff_Name"]))]
+    return df.iloc[0:0]
 
 
-# -----------------------------
-# Admin Data Maintenance helpers
-# -----------------------------
+def get_project_budget_for_display(user=None):
+    return scope_project_df(get_table("project_budget_master"), user)
 
-def _admin_only(u):
-    if not u or u.get("Role") != "Admin":
-        raise PermissionError("只有 Admin 可以執行後台資料維護。")
 
-def get_daily_worklog_by_id(worklog_id):
-    df = qdf("SELECT * FROM daily_worklog WHERE Worklog_ID=?", [worklog_id])
-    return None if df.empty else df.iloc[0].to_dict()
+def get_active_cost_ids(user=None):
+    df = query_df("SELECT Cost_Tracking_ID, Owner FROM project_budget_master WHERE Status='Active' ORDER BY Cost_Tracking_ID")
+    if user is not None and user["Role"] == "PD/PM":
+        df = df[df["Owner"] == user["Staff_Name"]]
+    return df["Cost_Tracking_ID"].tolist() if not df.empty else []
 
-def get_weekly_summary_by_id(weekly_input_id):
-    df = qdf("SELECT * FROM weekly_summary_input WHERE Weekly_Input_ID=?", [weekly_input_id])
-    return None if df.empty else df.iloc[0].to_dict()
 
-def update_daily_worklog(worklog_id, work_date, staff_name, cid, cat, hours, content, u=None):
-    _admin_only(u)
-    old = get_daily_worklog_by_id(worklog_id)
-    if not old:
-        raise ValueError("找不到指定 Worklog_ID。")
-    if not staff_name:
-        raise ValueError("Staff_Name 不可為空。")
-    if not cid:
-        raise ValueError("Cost_Tracking_ID 不可為空。")
-    if float(hours) <= 0:
-        raise ValueError("工時不可為 0。")
+def upsert_project_budget(record, user=None):
+    required = ["Cost_Tracking_ID", "Customer", "Project_Name", "Product_Line", "Platform_Line", "Status"]
+    for col in required:
+        if not record.get(col):
+            raise ValueError(f"{col} 不可為空。")
+    if float(record.get("Budget_Hours") or 0) <= 0:
+        raise ValueError("Budget_Hours 必須大於 0。")
+
+    sales_hours = record.get("Sales_Estimated_Hours") or record["Budget_Hours"]
+    user_email = user["User_Email"] if user else "system"
+    n = now()
+
+    with get_connection() as conn:
+        old = conn.execute("SELECT * FROM project_budget_master WHERE Cost_Tracking_ID=?", [record["Cost_Tracking_ID"]]).fetchone()
+
+        if user and user["Role"] == "PD/PM":
+            if old and old["Owner"] != user["Staff_Name"]:
+                raise PermissionError("PD/PM 只能修改自己 Owner 的 Cost_Tracking_ID。")
+            record["Owner"] = user["Staff_Name"]
+
+        if old:
+            conn.execute("""
+                UPDATE project_budget_master
+                SET Opportunity_ID=?, Customer=?, Project_Name=?, Product_Line=?, Platform_Line=?,
+                    Budget_Hours=?, Sales_Estimated_Hours=?, Owner=?, Status=?, Updated_At=?, Updated_By=?
+                WHERE Cost_Tracking_ID=?
+            """, [
+                record.get("Opportunity_ID"), record["Customer"], record["Project_Name"],
+                record["Product_Line"], record["Platform_Line"], float(record["Budget_Hours"]),
+                float(sales_hours), record.get("Owner"), record["Status"], n, user_email,
+                record["Cost_Tracking_ID"],
+            ])
+            action = "UPDATE"
+        else:
+            conn.execute("""
+                INSERT INTO project_budget_master (
+                    Opportunity_ID, Cost_Tracking_ID, Customer, Project_Name, Product_Line,
+                    Platform_Line, Budget_Hours, Sales_Estimated_Hours, Owner, Status,
+                    Created_At, Updated_At, Created_By, Updated_By
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, [
+                record.get("Opportunity_ID"), record["Cost_Tracking_ID"], record["Customer"],
+                record["Project_Name"], record["Product_Line"], record["Platform_Line"],
+                float(record["Budget_Hours"]), float(sales_hours), record.get("Owner"),
+                record["Status"], n, n, user_email, user_email,
+            ])
+            action = "INSERT"
+        conn.commit()
+
+    audit(action, "project_budget_master", record["Cost_Tracking_ID"], dict(old) if old else "", record, user_email)
+
+
+def add_daily_worklog(work_date, staff_name, cost_tracking_id, work_category, hours, content, user=None):
+    if user:
+        if user["Role"] == "Staff" and staff_name != user["Staff_Name"]:
+            raise PermissionError("Staff 只能替自己輸入日報。")
+        if user["Role"] == "PD/PM" and cost_tracking_id not in get_owned_cost_ids(user["Staff_Name"]):
+            raise PermissionError("PD/PM 只能輸入自己 Owner 的 Cost_Tracking_ID。")
+        if user["Role"] == "Manager":
+            sdf = query_df("SELECT Department FROM staff_master WHERE Staff_Name=?", [staff_name])
+            if not sdf.empty and sdf.iloc[0]["Department"] != user["Department"]:
+                raise PermissionError("Manager 只能替本部門人員輸入。")
+
     if float(hours) < 0.5 or float(hours) > 24:
-        raise ValueError("工時必須介於 0.5 到 24 小時。")
+        raise ValueError("工時必須介於 0.5 到 24。")
     if not content or not content.strip():
         raise ValueError("Work_Content 不可為空。")
     if len(content) > 100:
         raise ValueError("Work_Content 限制 100 字以內。")
 
-    sdf = qdf("SELECT * FROM staff_master WHERE Staff_Name=?", [staff_name])
-    pdf = qdf("SELECT * FROM project_budget_master WHERE Cost_Tracking_ID=?", [cid])
+    sdf = query_df("SELECT * FROM staff_master WHERE Staff_Name=?", [staff_name])
+    pdf = query_df("SELECT * FROM project_budget_master WHERE Cost_Tracking_ID=?", [cost_tracking_id])
     if sdf.empty:
         raise ValueError("人員不存在。")
     if pdf.empty:
         raise ValueError("工番號不存在。")
 
-    wd = work_date.strftime("%Y-%m-%d") if hasattr(work_date, "strftime") else str(work_date)
-    rw = get_current_week(wd)
-    user = u["User_Email"] if u else "system"
+    work_date_str = work_date.strftime("%Y-%m-%d") if hasattr(work_date, "strftime") else str(work_date)
+    report_week = get_current_week(work_date_str)
+    worklog_id = generate_id("WL", "daily_worklog", "Worklog_ID")
+    user_email = user["User_Email"] if user else "system"
 
-    execute("""UPDATE daily_worklog
-               SET Work_Date=?, Report_Week=?, Staff_Name=?, Department=?, Cost_Tracking_ID=?,
-                   Work_Category=?, Hours=?, Work_Content=?, Product_Line=?, Platform_Line=?
-               WHERE Worklog_ID=?""",
-            [wd, rw, staff_name, sdf.iloc[0]["Department"], cid,
-             cat, float(hours), content.strip(), pdf.iloc[0]["Product_Line"], pdf.iloc[0]["Platform_Line"],
-             worklog_id])
+    execute("""
+        INSERT INTO daily_worklog (
+            Worklog_ID, Work_Date, Report_Week, Staff_Name, Department, Cost_Tracking_ID,
+            Work_Category, Hours, Work_Content, Product_Line, Platform_Line, Created_At, Created_By
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, [
+        worklog_id, work_date_str, report_week, staff_name, sdf.iloc[0]["Department"],
+        cost_tracking_id, work_category, float(hours), content.strip(),
+        pdf.iloc[0]["Product_Line"], pdf.iloc[0]["Platform_Line"], now(), user_email,
+    ])
 
-    rebuild_weekly()
-    audit("ADMIN_UPDATE", "daily_worklog", worklog_id, old, {
-        "Work_Date": wd,
-        "Report_Week": rw,
-        "Staff_Name": staff_name,
-        "Cost_Tracking_ID": cid,
-        "Work_Category": cat,
-        "Hours": hours,
-        "Work_Content": content.strip(),
-    }, user)
+    rebuild_weekly_report_log()
+    audit("INSERT", "daily_worklog", worklog_id, "", {"Hours": hours, "Cost_Tracking_ID": cost_tracking_id}, user_email)
+    return worklog_id
 
-def delete_daily_worklog(worklog_id, u=None):
-    _admin_only(u)
-    old = get_daily_worklog_by_id(worklog_id)
-    if not old:
-        raise ValueError("找不到指定 Worklog_ID。")
-    user = u["User_Email"] if u else "system"
-    execute("DELETE FROM daily_worklog WHERE Worklog_ID=?", [worklog_id])
-    rebuild_weekly()
-    audit("ADMIN_DELETE", "daily_worklog", worklog_id, old, "", user)
 
-def update_weekly_summary_input(weekly_input_id, report_week, staff_name, cid, summary, target, health_value, u=None):
-    _admin_only(u)
-    old = get_weekly_summary_by_id(weekly_input_id)
-    if not old:
-        raise ValueError("找不到指定 Weekly_Input_ID。")
-    if not report_week:
-        raise ValueError("Report_Week 不可為空。")
-    if not staff_name:
-        raise ValueError("Staff_Name 不可為空。")
-    if not cid:
-        raise ValueError("Cost_Tracking_ID 不可為空。")
+def upsert_weekly_summary(report_week, staff_name, cost_tracking_id, summary, target, health, user=None):
+    if user:
+        if user["Role"] == "Staff" and staff_name != user["Staff_Name"]:
+            raise PermissionError("Staff 只能替自己輸入週報。")
+        if user["Role"] == "PD/PM" and cost_tracking_id not in get_owned_cost_ids(user["Staff_Name"]):
+            raise PermissionError("PD/PM 只能管理自己 Owner 的 Cost_Tracking_ID。")
+        if user["Role"] == "Manager":
+            sdf = query_df("SELECT Department FROM staff_master WHERE Staff_Name=?", [staff_name])
+            if not sdf.empty and sdf.iloc[0]["Department"] != user["Department"]:
+                raise PermissionError("Manager 只能替本部門人員輸入週報。")
+
     if not summary or not summary.strip():
         raise ValueError("Weekly_Summary 不可為空。")
     if not target or not target.strip():
         raise ValueError("Next_Week_Target 不可為空。")
-    if len(summary) > 500:
-        raise ValueError("Weekly_Summary 超過 500 字。")
-    if len(target) > 500:
-        raise ValueError("Next_Week_Target 超過 500 字。")
+    if len(summary) > 500 or len(target) > 500:
+        raise ValueError("週報欄位限制 500 字以內。")
 
-    user = u["User_Email"] if u else "system"
+    user_email = user["User_Email"] if user else "system"
     n = now()
 
-    # Avoid duplicate unique key conflict if Admin changes week/staff/cost id.
-    dup = qdf("""SELECT Weekly_Input_ID FROM weekly_summary_input
-                 WHERE Report_Week=? AND Staff_Name=? AND Cost_Tracking_ID=? AND Weekly_Input_ID<>?""",
-              [report_week, staff_name, cid, weekly_input_id])
-    if not dup.empty:
-        raise ValueError("相同 Report_Week + Staff_Name + Cost_Tracking_ID 的週報已存在，無法更新成重複組合。")
+    with get_connection() as conn:
+        old = conn.execute("""
+            SELECT * FROM weekly_summary_input
+            WHERE Report_Week=? AND Staff_Name=? AND Cost_Tracking_ID=?
+        """, [report_week, staff_name, cost_tracking_id]).fetchone()
 
-    execute("""UPDATE weekly_summary_input
-               SET Report_Week=?, Staff_Name=?, Cost_Tracking_ID=?, Weekly_Summary=?,
-                   Next_Week_Target=?, Health=?, Updated_At=?, Updated_By=?
-               WHERE Weekly_Input_ID=?""",
-            [report_week, staff_name, cid, summary.strip(), target.strip(), health_value, n, user, weekly_input_id])
+        if old:
+            wid = old["Weekly_Input_ID"]
+            conn.execute("""
+                UPDATE weekly_summary_input
+                SET Weekly_Summary=?, Next_Week_Target=?, Health=?, Updated_At=?, Updated_By=?
+                WHERE Weekly_Input_ID=?
+            """, [summary.strip(), target.strip(), health, n, user_email, wid])
+            action = "UPDATE"
+        else:
+            wid = generate_id("WSI", "weekly_summary_input", "Weekly_Input_ID")
+            conn.execute("""
+                INSERT INTO weekly_summary_input (
+                    Weekly_Input_ID, Report_Week, Staff_Name, Cost_Tracking_ID,
+                    Weekly_Summary, Next_Week_Target, Health, Created_At, Updated_At, Created_By, Updated_By
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, [
+                wid, report_week, staff_name, cost_tracking_id, summary.strip(), target.strip(),
+                health, n, n, user_email, user_email,
+            ])
+            action = "INSERT"
+        conn.commit()
 
-    rebuild_weekly()
-    audit("ADMIN_UPDATE", "weekly_summary_input", weekly_input_id, old, {
+    rebuild_weekly_report_log()
+    audit(action, "weekly_summary_input", wid, dict(old) if old else "", {
         "Report_Week": report_week,
         "Staff_Name": staff_name,
-        "Cost_Tracking_ID": cid,
-        "Weekly_Summary": summary.strip(),
-        "Next_Week_Target": target.strip(),
-        "Health": health_value,
-    }, user)
-
-def delete_weekly_summary_input(weekly_input_id, u=None):
-    _admin_only(u)
-    old = get_weekly_summary_by_id(weekly_input_id)
-    if not old:
-        raise ValueError("找不到指定 Weekly_Input_ID。")
-    user = u["User_Email"] if u else "system"
-    execute("DELETE FROM weekly_summary_input WHERE Weekly_Input_ID=?", [weekly_input_id])
-    rebuild_weekly()
-    audit("ADMIN_DELETE", "weekly_summary_input", weekly_input_id, old, "", user)
+        "Cost_Tracking_ID": cost_tracking_id,
+    }, user_email)
+    return wid
 
 
-# -----------------------------
-# Admin User / Master edit helpers
-# -----------------------------
+def rebuild_weekly_report_log():
+    execute("DELETE FROM weekly_report_log")
 
-def update_master_list_value(old_list_type, old_list_value, new_list_type, new_list_value, active_flag=1, u=None):
-    if not u or u.get("Role") != "Admin":
-        raise PermissionError("只有 Admin 可以修改 Master Data。")
-    if not old_list_type or not old_list_value:
-        raise ValueError("請選擇要修改的 Master List。")
-    if not new_list_type or not new_list_value:
-        raise ValueError("List_Type 與 List_Value 不可為空。")
+    base = query_df("""
+        SELECT
+            dw.Report_Week, dw.Staff_Name, dw.Department, dw.Cost_Tracking_ID,
+            pb.Customer, pb.Project_Name, pb.Product_Line, pb.Platform_Line,
+            SUM(dw.Hours) AS Weekly_Total_Hours
+        FROM daily_worklog dw
+        LEFT JOIN project_budget_master pb ON dw.Cost_Tracking_ID = pb.Cost_Tracking_ID
+        GROUP BY dw.Report_Week, dw.Staff_Name, dw.Department, dw.Cost_Tracking_ID,
+                 pb.Customer, pb.Project_Name, pb.Product_Line, pb.Platform_Line
+    """)
 
-    old = qdf("SELECT * FROM master_lists WHERE List_Type=? AND List_Value=?", [old_list_type, old_list_value])
+    with get_connection() as conn:
+        for _, row in base.iterrows():
+            details = query_df("""
+                SELECT Work_Date, Work_Category, Hours, Work_Content
+                FROM daily_worklog
+                WHERE Report_Week=? AND Staff_Name=? AND Cost_Tracking_ID=?
+                ORDER BY Work_Date, Created_At
+            """, [row["Report_Week"], row["Staff_Name"], row["Cost_Tracking_ID"]])
+
+            detail_text = "\n".join([
+                f'{d["Work_Date"]} | {d["Work_Category"]} | {d["Hours"]}h | {d["Work_Content"]}'
+                for _, d in details.iterrows()
+            ])
+
+            cats = query_df("""
+                SELECT Work_Category, SUM(Hours) AS Hours
+                FROM daily_worklog
+                WHERE Report_Week=? AND Staff_Name=? AND Cost_Tracking_ID=?
+                GROUP BY Work_Category
+                ORDER BY Work_Category
+            """, [row["Report_Week"], row["Staff_Name"], row["Cost_Tracking_ID"]])
+            cat_text = " / ".join([f'{c["Work_Category"]}: {c["Hours"]}h' for _, c in cats.iterrows()])
+
+            wsi = query_df("""
+                SELECT Weekly_Summary, Next_Week_Target, Health
+                FROM weekly_summary_input
+                WHERE Report_Week=? AND Staff_Name=? AND Cost_Tracking_ID=?
+            """, [row["Report_Week"], row["Staff_Name"], row["Cost_Tracking_ID"]])
+
+            if wsi.empty:
+                weekly_summary = ""
+                next_target = ""
+                health = ""
+                status = "Missing Summary"
+            else:
+                weekly_summary = wsi.iloc[0]["Weekly_Summary"]
+                next_target = wsi.iloc[0]["Next_Week_Target"]
+                health = wsi.iloc[0]["Health"]
+                status = "Submitted"
+
+            conn.execute("""
+                INSERT INTO weekly_report_log (
+                    Report_Week, Staff_Name, Department, Cost_Tracking_ID,
+                    Customer, Project_Name, Product_Line, Platform_Line, Weekly_Total_Hours,
+                    Daily_Work_Detail, Work_Category_Summary, Weekly_Summary, Next_Week_Target,
+                    Health, Submit_Status, Updated_At
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, [
+                row["Report_Week"], row["Staff_Name"], row["Department"], row["Cost_Tracking_ID"],
+                row["Customer"], row["Project_Name"], row["Product_Line"], row["Platform_Line"],
+                float(row["Weekly_Total_Hours"] or 0), detail_text, cat_text,
+                weekly_summary, next_target, health, status, now(),
+            ])
+
+        conn.commit()
+
+
+def get_week_options():
+    df = query_df("""
+        SELECT Report_Week FROM daily_worklog
+        UNION
+        SELECT Report_Week FROM weekly_summary_input
+        ORDER BY Report_Week DESC
+    """)
+    options = df["Report_Week"].tolist() if not df.empty else []
+    current = get_current_week()
+    if current not in options:
+        options.insert(0, current)
+    return options
+
+
+def get_cost_ids_for_staff_week(staff_name, report_week, user=None):
+    df = query_df("""
+        SELECT DISTINCT dw.Cost_Tracking_ID, pb.Owner
+        FROM daily_worklog dw
+        LEFT JOIN project_budget_master pb ON dw.Cost_Tracking_ID = pb.Cost_Tracking_ID
+        WHERE dw.Staff_Name=? AND dw.Report_Week=?
+        ORDER BY dw.Cost_Tracking_ID
+    """, [staff_name, report_week])
+    if user is not None and user["Role"] == "PD/PM":
+        df = df[df["Owner"] == user["Staff_Name"]]
+    ids = df["Cost_Tracking_ID"].tolist() if not df.empty else []
+    return ids or get_active_cost_ids(user)
+
+
+def get_weekly_report_filtered(start_week=None, end_week=None, department=None, staff_name=None, cost_tracking_id=None, user=None):
+    where = []
+    params = []
+    if start_week:
+        where.append("Report_Week >= ?")
+        params.append(start_week)
+    if end_week:
+        where.append("Report_Week <= ?")
+        params.append(end_week)
+    if department and department != "ALL":
+        where.append("Department = ?")
+        params.append(department)
+    if staff_name and staff_name != "ALL":
+        where.append("Staff_Name = ?")
+        params.append(staff_name)
+    if cost_tracking_id and cost_tracking_id != "ALL":
+        where.append("Cost_Tracking_ID = ?")
+        params.append(cost_tracking_id)
+
+    sql_where = "WHERE " + " AND ".join(where) if where else ""
+    df = query_df(f"""
+        SELECT Report_Week, Staff_Name, Department, Cost_Tracking_ID, Customer, Project_Name,
+               Product_Line, Platform_Line, Weekly_Total_Hours, Weekly_Summary,
+               Next_Week_Target, Health, Submit_Status
+        FROM weekly_report_log
+        {sql_where}
+        ORDER BY Report_Week DESC, Staff_Name, Cost_Tracking_ID
+    """, params)
+    return scope_weekly_df(df, user) if user else df
+
+
+def get_project_hour_summary(report_week=None, user=None):
+    current_week = report_week or get_current_week()
+    df = query_df("""
+        SELECT
+            pb.Cost_Tracking_ID, pb.Customer, pb.Project_Name, pb.Product_Line, pb.Platform_Line,
+            pb.Budget_Hours, pb.Sales_Estimated_Hours,
+            COALESCE(SUM(CASE WHEN dw.Report_Week=? THEN dw.Hours ELSE 0 END), 0) AS Weekly_Hours,
+            COALESCE(SUM(dw.Hours), 0) AS Cumulative_Hours,
+            pb.Owner, pb.Status
+        FROM project_budget_master pb
+        LEFT JOIN daily_worklog dw ON pb.Cost_Tracking_ID = dw.Cost_Tracking_ID
+        GROUP BY pb.Cost_Tracking_ID, pb.Customer, pb.Project_Name, pb.Product_Line,
+                 pb.Platform_Line, pb.Budget_Hours, pb.Sales_Estimated_Hours, pb.Owner, pb.Status
+        ORDER BY pb.Cost_Tracking_ID
+    """, [current_week])
+    df = scope_project_df(df, user) if user else df
+    if df.empty:
+        return df
+    df["Remaining_Hours"] = df["Budget_Hours"] - df["Cumulative_Hours"]
+    df["Budget_Burn_Rate"] = df.apply(lambda r: r["Cumulative_Hours"] / r["Budget_Hours"] if r["Budget_Hours"] else 0, axis=1)
+    df["Sales_Estimate_Burn_Rate"] = df.apply(lambda r: r["Cumulative_Hours"] / r["Sales_Estimated_Hours"] if r["Sales_Estimated_Hours"] else 0, axis=1)
+    df["Budget_Health"] = df["Budget_Burn_Rate"].apply(get_budget_health)
+    return df
+
+
+def get_budget_health(rate):
+    if rate < 0.5:
+        return "Green"
+    if rate <= 1.0:
+        return "Yellow"
+    if rate <= 1.5:
+        return "Red"
+    if rate <= 2.0:
+        return "Critical"
+    return "Overrun"
+
+
+def get_staff_weekly_summary(user=None):
+    df = query_df("""
+        SELECT Report_Week, Staff_Name, Department,
+               SUM(Weekly_Total_Hours) AS Total_Weekly_Hours,
+               COUNT(DISTINCT Cost_Tracking_ID) AS Number_of_Cost_IDs,
+               SUM(CASE WHEN Submit_Status='Missing Summary' THEN 1 ELSE 0 END) AS Missing_Summary_Count
+        FROM weekly_report_log
+        GROUP BY Report_Week, Staff_Name, Department
+        ORDER BY Report_Week DESC, Staff_Name
+    """)
+    return scope_weekly_df(df, user) if user else df
+
+
+def get_missing_weekly_summary(user=None):
+    df = query_df("""
+        SELECT Report_Week, Staff_Name, Department, Cost_Tracking_ID, Customer, Project_Name,
+               Weekly_Total_Hours, 'Weekly Summary' AS Missing_Item, 'Not Sent' AS Reminder_Status
+        FROM weekly_report_log
+        WHERE Submit_Status='Missing Summary'
+        ORDER BY Report_Week DESC, Staff_Name, Cost_Tracking_ID
+    """)
+    return scope_weekly_df(df, user) if user else df
+
+
+def _admin_only(user):
+    if not user or user.get("Role") != "Admin":
+        raise PermissionError("只有 Admin 可以執行此操作。")
+
+
+def upsert_staff(staff_name, department, role="Engineer", active_flag=1, user=None):
+    _admin_only(user)
+    if not staff_name:
+        raise ValueError("Staff_Name 不可為空。")
+    old = query_df("SELECT * FROM staff_master WHERE Staff_Name=?", [staff_name])
+    execute("""
+        INSERT INTO staff_master (Staff_Name, Department, Role, Active_Flag)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(Staff_Name)
+        DO UPDATE SET Department=excluded.Department, Role=excluded.Role, Active_Flag=excluded.Active_Flag
+    """, [staff_name.strip(), department, role, int(active_flag)])
+    audit("ADMIN_UPSERT", "staff_master", staff_name, old.iloc[0].to_dict() if not old.empty else "", {
+        "Department": department, "Role": role, "Active_Flag": int(active_flag)
+    }, user["User_Email"])
+
+
+def update_staff_master(staff_name, department, role, active_flag, user=None):
+    return upsert_staff(staff_name, department, role, active_flag, user)
+
+
+def delete_staff_master(staff_name, user=None):
+    _admin_only(user)
+    old = query_df("SELECT * FROM staff_master WHERE Staff_Name=?", [staff_name])
     if old.empty:
-        raise ValueError("找不到指定 Master List。")
-
-    duplicate = qdf("""SELECT * FROM master_lists
-                       WHERE List_Type=? AND List_Value=?
-                         AND NOT (List_Type=? AND List_Value=?)""",
-                    [new_list_type, new_list_value.strip(), old_list_type, old_list_value])
-    if not duplicate.empty:
-        raise ValueError("修改後的 List_Type + List_Value 已存在，不能重複。")
-
-    execute("""UPDATE master_lists
-               SET List_Type=?, List_Value=?, Active_Flag=?
-               WHERE List_Type=? AND List_Value=?""",
-            [new_list_type, new_list_value.strip(), int(active_flag), old_list_type, old_list_value])
-
-    audit("ADMIN_UPDATE", "master_lists", f"{old_list_type}:{old_list_value}",
-          old.iloc[0].to_dict(),
-          {"List_Type": new_list_type, "List_Value": new_list_value.strip(), "Active_Flag": int(active_flag)},
-          u["User_Email"])
-
-def delete_master_list_value(list_type, list_value, u=None):
-    if not u or u.get("Role") != "Admin":
-        raise PermissionError("只有 Admin 可以刪除 Master Data。")
-    old = qdf("SELECT * FROM master_lists WHERE List_Type=? AND List_Value=?", [list_type, list_value])
-    if old.empty:
-        raise ValueError("找不到指定 Master List。")
-
-    # Basic reference protection.
+        raise ValueError("找不到 Staff_Name。")
     refs = []
-    if list_type == "Department":
-        if not qdf("SELECT 1 FROM staff_master WHERE Department=? LIMIT 1", [list_value]).empty:
-            refs.append("staff_master.Department")
-        if not qdf("SELECT 1 FROM daily_worklog WHERE Department=? LIMIT 1", [list_value]).empty:
-            refs.append("daily_worklog.Department")
-    if list_type == "Product_Line":
-        if not qdf("SELECT 1 FROM project_budget_master WHERE Product_Line=? LIMIT 1", [list_value]).empty:
-            refs.append("project_budget_master.Product_Line")
-    if list_type == "Platform_Line":
-        if not qdf("SELECT 1 FROM project_budget_master WHERE Platform_Line=? LIMIT 1", [list_value]).empty:
-            refs.append("project_budget_master.Platform_Line")
-    if list_type == "Work_Category":
-        if not qdf("SELECT 1 FROM daily_worklog WHERE Work_Category=? LIMIT 1", [list_value]).empty:
-            refs.append("daily_worklog.Work_Category")
-    if list_type == "Health":
-        if not qdf("SELECT 1 FROM weekly_summary_input WHERE Health=? LIMIT 1", [list_value]).empty:
-            refs.append("weekly_summary_input.Health")
-    if list_type == "Status":
-        if not qdf("SELECT 1 FROM project_budget_master WHERE Status=? LIMIT 1", [list_value]).empty:
-            refs.append("project_budget_master.Status")
-    if list_type == "Role":
-        if not qdf("SELECT 1 FROM user_master WHERE Role=? LIMIT 1", [list_value]).empty:
-            refs.append("user_master.Role")
-
+    for table, col in [
+        ("daily_worklog", "Staff_Name"),
+        ("weekly_summary_input", "Staff_Name"),
+        ("project_budget_master", "Owner"),
+        ("user_master", "Staff_Name"),
+    ]:
+        if not query_df(f"SELECT 1 FROM {table} WHERE {col}=? LIMIT 1", [staff_name]).empty:
+            refs.append(f"{table}.{col}")
     if refs:
-        raise ValueError("此 Master Value 已被使用，建議改為 Active_Flag=0，不建議刪除。引用位置：" + ", ".join(refs))
+        raise ValueError("此人員已被資料引用，請改 Active_Flag=0。引用：" + ", ".join(refs))
+    execute("DELETE FROM staff_master WHERE Staff_Name=?", [staff_name])
+    audit("ADMIN_DELETE", "staff_master", staff_name, old.iloc[0].to_dict(), "", user["User_Email"])
+
+
+def upsert_user(user_email, staff_name, department, role, active_flag=1, user=None):
+    _admin_only(user)
+    if not user_email:
+        raise ValueError("User_Email 不可為空。")
+    if role not in ROLES:
+        raise ValueError("Role 必須是 Admin / Manager / Staff / PD/PM / Viewer。")
+    old = query_df("SELECT * FROM user_master WHERE User_Email=?", [user_email])
+    n = now()
+    execute("""
+        INSERT INTO user_master (User_Email, Staff_Name, Department, Role, Active_Flag, Created_At, Updated_At)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(User_Email)
+        DO UPDATE SET Staff_Name=excluded.Staff_Name,
+                      Department=excluded.Department,
+                      Role=excluded.Role,
+                      Active_Flag=excluded.Active_Flag,
+                      Updated_At=excluded.Updated_At
+    """, [user_email.strip(), staff_name, department, role, int(active_flag), n, n])
+    audit("ADMIN_UPSERT", "user_master", user_email, old.iloc[0].to_dict() if not old.empty else "", {
+        "Staff_Name": staff_name, "Department": department, "Role": role, "Active_Flag": int(active_flag)
+    }, user["User_Email"])
+
+
+def delete_user(user_email, user=None):
+    _admin_only(user)
+    if user_email == user.get("User_Email"):
+        raise ValueError("不可刪除目前登入中的自己。")
+    old = query_df("SELECT * FROM user_master WHERE User_Email=?", [user_email])
+    if old.empty:
+        raise ValueError("找不到 User。")
+    execute("DELETE FROM user_master WHERE User_Email=?", [user_email])
+    audit("ADMIN_DELETE", "user_master", user_email, old.iloc[0].to_dict(), "", user["User_Email"])
+
+
+def add_master_list_value(list_type, list_value, user=None):
+    _admin_only(user)
+    if not list_type or not list_value:
+        raise ValueError("List_Type / List_Value 不可為空。")
+    execute("""
+        INSERT OR IGNORE INTO master_lists (List_Type, List_Value, Active_Flag)
+        VALUES (?, ?, 1)
+    """, [list_type, list_value.strip()])
+    audit("ADMIN_INSERT_OR_IGNORE", "master_lists", f"{list_type}:{list_value}", "", "", user["User_Email"])
+
+
+def update_master_list_value(old_list_type, old_list_value, new_list_type, new_list_value, active_flag=1, user=None):
+    _admin_only(user)
+    old = query_df("SELECT * FROM master_lists WHERE List_Type=? AND List_Value=?", [old_list_type, old_list_value])
+    if old.empty:
+        raise ValueError("找不到 Master List。")
+    dup = query_df("""
+        SELECT 1 FROM master_lists
+        WHERE List_Type=? AND List_Value=? AND NOT (List_Type=? AND List_Value=?)
+    """, [new_list_type, new_list_value.strip(), old_list_type, old_list_value])
+    if not dup.empty:
+        raise ValueError("修改後的 List_Type + List_Value 已存在。")
+    execute("""
+        UPDATE master_lists
+        SET List_Type=?, List_Value=?, Active_Flag=?
+        WHERE List_Type=? AND List_Value=?
+    """, [new_list_type, new_list_value.strip(), int(active_flag), old_list_type, old_list_value])
+    audit("ADMIN_UPDATE", "master_lists", f"{old_list_type}:{old_list_value}", old.iloc[0].to_dict(), {
+        "List_Type": new_list_type, "List_Value": new_list_value.strip(), "Active_Flag": int(active_flag)
+    }, user["User_Email"])
+
+
+def delete_master_list_value(list_type, list_value, user=None):
+    _admin_only(user)
+    old = query_df("SELECT * FROM master_lists WHERE List_Type=? AND List_Value=?", [list_type, list_value])
+    if old.empty:
+        raise ValueError("找不到 Master List。")
+
+    refs = []
+    checks = {
+        "Department": [("staff_master", "Department"), ("daily_worklog", "Department"), ("user_master", "Department")],
+        "Product_Line": [("project_budget_master", "Product_Line"), ("daily_worklog", "Product_Line")],
+        "Platform_Line": [("project_budget_master", "Platform_Line"), ("daily_worklog", "Platform_Line")],
+        "Work_Category": [("daily_worklog", "Work_Category")],
+        "Health": [("weekly_summary_input", "Health")],
+        "Status": [("project_budget_master", "Status")],
+        "Role": [("user_master", "Role")],
+    }
+    for table, col in checks.get(list_type, []):
+        if not query_df(f"SELECT 1 FROM {table} WHERE {col}=? LIMIT 1", [list_value]).empty:
+            refs.append(f"{table}.{col}")
+    if refs:
+        raise ValueError("此 Master Value 已被使用，請改 Active_Flag=0。引用：" + ", ".join(refs))
 
     execute("DELETE FROM master_lists WHERE List_Type=? AND List_Value=?", [list_type, list_value])
-    audit("ADMIN_DELETE", "master_lists", f"{list_type}:{list_value}", old.iloc[0].to_dict(), "", u["User_Email"])
+    audit("ADMIN_DELETE", "master_lists", f"{list_type}:{list_value}", old.iloc[0].to_dict(), "", user["User_Email"])
 
-def update_staff_master(staff_name, department, role="Engineer", active_flag=1, u=None):
-    if not u or u.get("Role") != "Admin":
-        raise PermissionError("只有 Admin 可以修改 Staff_Master。")
-    old = qdf("SELECT * FROM staff_master WHERE Staff_Name=?", [staff_name])
-    if old.empty:
-        raise ValueError("找不到指定 Staff_Name。")
-    execute("""UPDATE staff_master
-               SET Department=?, Role=?, Active_Flag=?
-               WHERE Staff_Name=?""",
-            [department, role, int(active_flag), staff_name])
-    audit("ADMIN_UPDATE", "staff_master", staff_name, old.iloc[0].to_dict(),
-          {"Department": department, "Role": role, "Active_Flag": int(active_flag)}, u["User_Email"])
 
-def delete_staff_master(staff_name, u=None):
-    if not u or u.get("Role") != "Admin":
-        raise PermissionError("只有 Admin 可以刪除 Staff_Master。")
-    old = qdf("SELECT * FROM staff_master WHERE Staff_Name=?", [staff_name])
-    if old.empty:
-        raise ValueError("找不到指定 Staff_Name。")
-    refs = []
-    if not qdf("SELECT 1 FROM daily_worklog WHERE Staff_Name=? LIMIT 1", [staff_name]).empty:
-        refs.append("daily_worklog")
-    if not qdf("SELECT 1 FROM weekly_summary_input WHERE Staff_Name=? LIMIT 1", [staff_name]).empty:
-        refs.append("weekly_summary_input")
-    if not qdf("SELECT 1 FROM project_budget_master WHERE Owner=? LIMIT 1", [staff_name]).empty:
-        refs.append("project_budget_master.Owner")
-    if not qdf("SELECT 1 FROM user_master WHERE Staff_Name=? LIMIT 1", [staff_name]).empty:
-        refs.append("user_master")
-    if refs:
-        raise ValueError("此人員已被資料引用，建議改為 Active_Flag=0，不建議刪除。引用位置：" + ", ".join(refs))
-    execute("DELETE FROM staff_master WHERE Staff_Name=?", [staff_name])
-    audit("ADMIN_DELETE", "staff_master", staff_name, old.iloc[0].to_dict(), "", u["User_Email"])
+def get_daily_worklog_by_id(worklog_id):
+    df = query_df("SELECT * FROM daily_worklog WHERE Worklog_ID=?", [worklog_id])
+    return None if df.empty else df.iloc[0].to_dict()
 
-def delete_user(user_email, u=None):
-    if not u or u.get("Role") != "Admin":
-        raise PermissionError("只有 Admin 可以刪除 User。")
-    if user_email == u.get("User_Email"):
-        raise ValueError("不可刪除目前登入中的 Admin 自己。請先切換其他 Admin。")
-    old = qdf("SELECT * FROM user_master WHERE User_Email=?", [user_email])
-    if old.empty:
-        raise ValueError("找不到指定 User。")
-    execute("DELETE FROM user_master WHERE User_Email=?", [user_email])
-    audit("ADMIN_DELETE", "user_master", user_email, old.iloc[0].to_dict(), "", u["User_Email"])
+
+def update_daily_worklog(worklog_id, work_date, staff_name, cost_tracking_id, work_category, hours, content, user=None):
+    _admin_only(user)
+    old = get_daily_worklog_by_id(worklog_id)
+    if not old:
+        raise ValueError("找不到 Worklog_ID。")
+    sdf = query_df("SELECT * FROM staff_master WHERE Staff_Name=?", [staff_name])
+    pdf = query_df("SELECT * FROM project_budget_master WHERE Cost_Tracking_ID=?", [cost_tracking_id])
+    if sdf.empty:
+        raise ValueError("人員不存在。")
+    if pdf.empty:
+        raise ValueError("工番號不存在。")
+    if float(hours) < 0.5 or float(hours) > 24:
+        raise ValueError("工時必須介於 0.5 到 24。")
+    if not content or not content.strip():
+        raise ValueError("Work_Content 不可為空。")
+    if len(content) > 100:
+        raise ValueError("Work_Content 限制 100 字以內。")
+
+    wd = work_date.strftime("%Y-%m-%d") if hasattr(work_date, "strftime") else str(work_date)
+    rw = get_current_week(wd)
+    execute("""
+        UPDATE daily_worklog
+        SET Work_Date=?, Report_Week=?, Staff_Name=?, Department=?, Cost_Tracking_ID=?,
+            Work_Category=?, Hours=?, Work_Content=?, Product_Line=?, Platform_Line=?
+        WHERE Worklog_ID=?
+    """, [
+        wd, rw, staff_name, sdf.iloc[0]["Department"], cost_tracking_id, work_category,
+        float(hours), content.strip(), pdf.iloc[0]["Product_Line"], pdf.iloc[0]["Platform_Line"], worklog_id
+    ])
+    rebuild_weekly_report_log()
+    audit("ADMIN_UPDATE", "daily_worklog", worklog_id, old, {
+        "Work_Date": wd, "Report_Week": rw, "Staff_Name": staff_name,
+        "Cost_Tracking_ID": cost_tracking_id, "Hours": hours
+    }, user["User_Email"])
+
+
+def delete_daily_worklog(worklog_id, user=None):
+    _admin_only(user)
+    old = get_daily_worklog_by_id(worklog_id)
+    if not old:
+        raise ValueError("找不到 Worklog_ID。")
+    execute("DELETE FROM daily_worklog WHERE Worklog_ID=?", [worklog_id])
+    rebuild_weekly_report_log()
+    audit("ADMIN_DELETE", "daily_worklog", worklog_id, old, "", user["User_Email"])
+
+
+def get_weekly_summary_by_id(weekly_input_id):
+    df = query_df("SELECT * FROM weekly_summary_input WHERE Weekly_Input_ID=?", [weekly_input_id])
+    return None if df.empty else df.iloc[0].to_dict()
+
+
+def update_weekly_summary_input(weekly_input_id, report_week, staff_name, cost_tracking_id, summary, target, health, user=None):
+    _admin_only(user)
+    old = get_weekly_summary_by_id(weekly_input_id)
+    if not old:
+        raise ValueError("找不到 Weekly_Input_ID。")
+    if not summary or not summary.strip() or not target or not target.strip():
+        raise ValueError("週報內容不可為空。")
+    if len(summary) > 500 or len(target) > 500:
+        raise ValueError("週報欄位限制 500 字以內。")
+    dup = query_df("""
+        SELECT Weekly_Input_ID FROM weekly_summary_input
+        WHERE Report_Week=? AND Staff_Name=? AND Cost_Tracking_ID=? AND Weekly_Input_ID<>?
+    """, [report_week, staff_name, cost_tracking_id, weekly_input_id])
+    if not dup.empty:
+        raise ValueError("相同 Report_Week + Staff_Name + Cost_Tracking_ID 的週報已存在。")
+
+    execute("""
+        UPDATE weekly_summary_input
+        SET Report_Week=?, Staff_Name=?, Cost_Tracking_ID=?, Weekly_Summary=?,
+            Next_Week_Target=?, Health=?, Updated_At=?, Updated_By=?
+        WHERE Weekly_Input_ID=?
+    """, [
+        report_week, staff_name, cost_tracking_id, summary.strip(), target.strip(),
+        health, now(), user["User_Email"], weekly_input_id
+    ])
+    rebuild_weekly_report_log()
+    audit("ADMIN_UPDATE", "weekly_summary_input", weekly_input_id, old, {
+        "Report_Week": report_week, "Staff_Name": staff_name, "Cost_Tracking_ID": cost_tracking_id
+    }, user["User_Email"])
+
+
+def delete_weekly_summary_input(weekly_input_id, user=None):
+    _admin_only(user)
+    old = get_weekly_summary_by_id(weekly_input_id)
+    if not old:
+        raise ValueError("找不到 Weekly_Input_ID。")
+    execute("DELETE FROM weekly_summary_input WHERE Weekly_Input_ID=?", [weekly_input_id])
+    rebuild_weekly_report_log()
+    audit("ADMIN_DELETE", "weekly_summary_input", weekly_input_id, old, "", user["User_Email"])
+
+
+# -----------------------------
+# Excel Admin Config v3
+# -----------------------------
+
+CONFIG_SHEETS = {
+    "Staff_Master": ["Staff_Name", "Department", "Role", "Active_Flag"],
+    "User_Master": ["User_Email", "Staff_Name", "Department", "Role", "Active_Flag"],
+    "Role_Permission": ["Role", "Page_Name", "Can_View", "Can_Edit", "Can_Export"],
+    "Master_Lists": ["List_Type", "List_Value", "Active_Flag"],
+}
+
+def _style_ws(ws):
+    header_fill = PatternFill("solid", fgColor="D9EAF7")
+    header_font = Font(bold=True)
+    thin = Side(style="thin", color="DDDDDD")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    if ws.max_row >= 1:
+        for cell in ws[1]:
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = border
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+    for col in range(1, ws.max_column + 1):
+        letter = get_column_letter(col)
+        max_len = 12
+        for row in range(1, min(ws.max_row, 200) + 1):
+            v = ws[f"{letter}{row}"].value
+            if v is not None:
+                max_len = max(max_len, min(len(str(v)) + 2, 50))
+            ws[f"{letter}{row}"].border = border
+            ws[f"{letter}{row}"].alignment = Alignment(vertical="top", wrap_text=True)
+        ws.column_dimensions[letter].width = max_len
+
+def _write_df_to_ws(wb, sheet_name, df):
+    ws = wb.create_sheet(sheet_name)
+    if df is None or df.empty:
+        ws.append(CONFIG_SHEETS.get(sheet_name, ["No Data"]))
+    else:
+        ws.append(list(df.columns))
+        for _, row in df.iterrows():
+            ws.append([row[col] for col in df.columns])
+    _style_ws(ws)
+
+def export_admin_config_workbook():
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    _write_df_to_ws(wb, "Staff_Master", get_table("staff_master")[CONFIG_SHEETS["Staff_Master"]])
+    _write_df_to_ws(wb, "User_Master", get_table("user_master")[CONFIG_SHEETS["User_Master"]])
+    _write_df_to_ws(wb, "Role_Permission", get_table("role_permission")[CONFIG_SHEETS["Role_Permission"]])
+    _write_df_to_ws(wb, "Master_Lists", get_table("master_lists")[CONFIG_SHEETS["Master_Lists"]])
+
+    guide = pd.DataFrame([
+        {"Item": "Role", "Rule": "Admin / Manager / Staff / PD/PM / Viewer"},
+        {"Item": "Page_Name", "Rule": "必須是系統左側選單名稱之一"},
+        {"Item": "Active_Flag", "Rule": "只能填 1 或 0"},
+        {"Item": "Can_View / Can_Edit / Can_Export", "Rule": "只能填 1 或 0"},
+        {"Item": "User_Master.Staff_Name", "Rule": "必須存在於 Staff_Master"},
+        {"Item": "Department", "Rule": "必須存在於 Master_Lists 中 List_Type=Department"},
+        {"Item": "Import Mode", "Rule": "Staff/User/Master 使用 upsert；Role_Permission 會全量重建"},
+    ])
+    _write_df_to_ws(wb, "Validation_Guide", guide)
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    filename = f"GLOBAL_Weekly_Report_Admin_Config_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+    return filename, output.getvalue()
+
+def _normalize_config_df(df, required_cols):
+    df = df.copy()
+    df.columns = [str(c).strip() for c in df.columns]
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        raise ValueError("缺少欄位：" + ", ".join(missing))
+    df = df[required_cols]
+    df = df.dropna(how="all")
+    for col in df.columns:
+        if df[col].dtype == "object":
+            df[col] = df[col].astype(str).str.strip()
+    return df
+
+def read_admin_config_excel(uploaded_file):
+    frames = {}
+    for sheet, cols in CONFIG_SHEETS.items():
+        try:
+            raw = pd.read_excel(uploaded_file, sheet_name=sheet)
+        except Exception as e:
+            raise ValueError(f"無法讀取 Sheet: {sheet}. {e}")
+        frames[sheet] = _normalize_config_df(raw, cols)
+    return frames
+
+def validate_admin_config_frames(frames):
+    errors = []
+    summary = []
+
+    for sheet, cols in CONFIG_SHEETS.items():
+        if sheet not in frames:
+            errors.append(f"缺少 Sheet：{sheet}")
+            continue
+        df = frames[sheet]
+        missing = [c for c in cols if c not in df.columns]
+        if missing:
+            errors.append(f"{sheet} 缺少欄位：{', '.join(missing)}")
+        summary.append({"Sheet": sheet, "Rows": len(df)})
+
+    if errors:
+        return errors, pd.DataFrame(summary)
+
+    staff = frames["Staff_Master"]
+    users = frames["User_Master"]
+    perms = frames["Role_Permission"]
+    masters = frames["Master_Lists"]
+
+    def check_binary(df, cols, sheet):
+        for col in cols:
+            bad = df[~df[col].fillna(0).astype(int).isin([0, 1])]
+            if not bad.empty:
+                errors.append(f"{sheet}.{col} 只能是 0 或 1。")
+
+    for name, df, key_cols in [
+        ("Staff_Master", staff, ["Staff_Name"]),
+        ("User_Master", users, ["User_Email"]),
+        ("Role_Permission", perms, ["Role", "Page_Name"]),
+        ("Master_Lists", masters, ["List_Type", "List_Value"]),
+    ]:
+        for col in key_cols:
+            if df[col].isna().any() or (df[col].astype(str).str.strip() == "").any():
+                errors.append(f"{name}.{col} 不可空白。")
+        dup = df[df.duplicated(key_cols, keep=False)]
+        if not dup.empty:
+            errors.append(f"{name} 主鍵重複：{key_cols}")
+
+    check_binary(staff, ["Active_Flag"], "Staff_Master")
+    check_binary(users, ["Active_Flag"], "User_Master")
+    check_binary(perms, ["Can_View", "Can_Edit", "Can_Export"], "Role_Permission")
+    check_binary(masters, ["Active_Flag"], "Master_Lists")
+
+    allowed_depts = set(masters[(masters["List_Type"] == "Department") & (masters["Active_Flag"].astype(int) == 1)]["List_Value"].astype(str))
+    allowed_roles = set(ROLES)
+    allowed_pages = set(PAGE_ORDER)
+    staff_names = set(staff["Staff_Name"].astype(str))
+
+    for dept in staff["Department"].astype(str):
+        if dept not in allowed_depts:
+            errors.append(f"Staff_Master.Department 不存在於 Master_Lists Department：{dept}")
+
+    for _, row in users.iterrows():
+        if str(row["Staff_Name"]) not in staff_names:
+            errors.append(f"User_Master.Staff_Name 不存在於 Staff_Master：{row['Staff_Name']}")
+        if str(row["Department"]) not in allowed_depts:
+            errors.append(f"User_Master.Department 不存在於 Master_Lists Department：{row['Department']}")
+        if str(row["Role"]) not in allowed_roles:
+            errors.append(f"User_Master.Role 不合法：{row['Role']}")
+
+    for _, row in perms.iterrows():
+        if str(row["Role"]) not in allowed_roles:
+            errors.append(f"Role_Permission.Role 不合法：{row['Role']}")
+        if str(row["Page_Name"]) not in allowed_pages:
+            errors.append(f"Role_Permission.Page_Name 不存在：{row['Page_Name']}")
+
+    for role in ROLES:
+        if role not in set(perms["Role"].astype(str)):
+            errors.append(f"Role_Permission 缺少角色設定：{role}")
+
+    return errors, pd.DataFrame(summary)
+
+def apply_admin_config_frames(frames, user):
+    _admin_only(user)
+    errors, summary = validate_admin_config_frames(frames)
+    if errors:
+        raise ValueError("Validation failed: " + " / ".join(errors[:10]))
+
+    user_email = user["User_Email"]
+    n = now()
+
+    staff = frames["Staff_Master"].copy()
+    users = frames["User_Master"].copy()
+    perms = frames["Role_Permission"].copy()
+    masters = frames["Master_Lists"].copy()
+
+    with get_connection() as conn:
+        c = conn.cursor()
+
+        for _, row in masters.iterrows():
+            c.execute("""
+                INSERT INTO master_lists (List_Type, List_Value, Active_Flag)
+                VALUES (?, ?, ?)
+                ON CONFLICT(List_Type, List_Value)
+                DO UPDATE SET Active_Flag=excluded.Active_Flag
+            """, [str(row["List_Type"]), str(row["List_Value"]), int(row["Active_Flag"])])
+
+        for _, row in staff.iterrows():
+            c.execute("""
+                INSERT INTO staff_master (Staff_Name, Department, Role, Active_Flag)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(Staff_Name)
+                DO UPDATE SET Department=excluded.Department, Role=excluded.Role, Active_Flag=excluded.Active_Flag
+            """, [str(row["Staff_Name"]), str(row["Department"]), str(row["Role"]), int(row["Active_Flag"])])
+
+        for _, row in users.iterrows():
+            c.execute("""
+                INSERT INTO user_master (User_Email, Staff_Name, Department, Role, Active_Flag, Created_At, Updated_At)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(User_Email)
+                DO UPDATE SET Staff_Name=excluded.Staff_Name,
+                              Department=excluded.Department,
+                              Role=excluded.Role,
+                              Active_Flag=excluded.Active_Flag,
+                              Updated_At=excluded.Updated_At
+            """, [str(row["User_Email"]), str(row["Staff_Name"]), str(row["Department"]),
+                  str(row["Role"]), int(row["Active_Flag"]), n, n])
+
+        c.execute("DELETE FROM role_permission")
+        for _, row in perms.iterrows():
+            c.execute("""
+                INSERT INTO role_permission (Role, Page_Name, Can_View, Can_Edit, Can_Export)
+                VALUES (?, ?, ?, ?, ?)
+            """, [str(row["Role"]), str(row["Page_Name"]), int(row["Can_View"]),
+                  int(row["Can_Edit"]), int(row["Can_Export"])])
+
+        conn.commit()
+
+    audit("ADMIN_CONFIG_IMPORT", "admin_config_excel", "GLOBAL_Weekly_Report_Admin_Config", "", {
+        "Staff_Master": len(staff),
+        "User_Master": len(users),
+        "Role_Permission": len(perms),
+        "Master_Lists": len(masters),
+    }, user_email)
+    return summary

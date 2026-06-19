@@ -1,47 +1,167 @@
-# GLOBAL Weekly Report Demo v2
+# GLOBAL Weekly Report Demo v3 - Excel Admin Config
 
-此版本在 v1 基礎上加入 **PD/PM 權限管理** 與 **Demo Login**。
+GLOBAL Weekly Report Demo v3 是一套本機端 / Streamlit Cloud DEMO 用工時週報管理系統。
 
-## v2 重點
-
-- 將原本 Sales 角色改為 `PD/PM`
-- 新增 Demo Login，下拉選擇不同登入者
-- 新增 `user_master`
-- 新增 `role_permission`
-- 新增 `audit_log`
-- 左側選單依 Role 顯示
-- 查詢與匯出依 Role 限制資料範圍
-- PD/PM 只能管理自己 Owner 的 Cost_Tracking_ID
-- Staff 只能看與輸入自己的資料
-- Manager 只能看本部門資料
-- Admin 可看全部
-- Viewer 只能看 Dashboard
-
-## 檔案結構
+v3 在 v2 的基礎上追加：
 
 ```text
-global_weekly_report_demo_v2/
-├─ app.py
-├─ database.py
-├─ export_excel.py
-├─ requirements.txt
-├─ README.md
-└─ .gitignore
+Admin Config Import / Export
 ```
 
-## 安裝
+Admin 可以用一個 Excel workbook 維護：
 
-```powershell
-py -m pip install -r requirements.txt
+1. Staff_Master
+2. User_Master
+3. Role_Permission
+4. Master_Lists
+
+---
+
+## 1. v3 新增功能
+
+### Admin Config Excel
+
+新增頁面：
+
+```text
+Admin Config Import / Export
 ```
 
-## 執行
+使用者必須用 Admin 登入，例如：
 
-```powershell
-py -m streamlit run app.py
+```text
+admin@demo.com
 ```
 
-## Demo Login 預設帳號
+此頁面提供：
+
+1. Export Current Admin Config
+2. Upload Admin Config Excel
+3. Validation Check
+4. Apply Config to Database
+5. Audit_Log 記錄匯入操作
+
+---
+
+## 2. Excel Workbook 結構
+
+系統匯出的設定檔名稱類似：
+
+```text
+GLOBAL_Weekly_Report_Admin_Config_YYYYMMDD_HHMM.xlsx
+```
+
+包含以下 Sheet：
+
+```text
+Staff_Master
+User_Master
+Role_Permission
+Master_Lists
+Validation_Guide
+```
+
+---
+
+## 3. Sheet 定義
+
+### Staff_Master
+
+| Staff_Name | Department | Role | Active_Flag |
+|---|---|---|---|
+
+說明：
+
+```text
+Staff_Name   人員名稱，主鍵
+Department   部門，需存在於 Master_Lists 的 Department
+Role         人員職務，例如 Engineer / PD/PM
+Active_Flag  1=啟用，0=停用
+```
+
+### User_Master
+
+| User_Email | Staff_Name | Department | Role | Active_Flag |
+|---|---|---|---|---|
+
+說明：
+
+```text
+User_Email   Demo Login 帳號，主鍵
+Staff_Name   對應 Staff_Master
+Department   權限範圍用部門
+Role         系統角色：Admin / Manager / Staff / PD/PM / Viewer
+Active_Flag  1=啟用，0=停用
+```
+
+### Role_Permission
+
+| Role | Page_Name | Can_View | Can_Edit | Can_Export |
+|---|---|---:|---:|---:|
+
+說明：
+
+```text
+Role         系統角色
+Page_Name    左側頁面名稱
+Can_View     1=可見，0=不可見
+Can_Edit     1=可編輯，0=不可編輯
+Can_Export   1=可匯出，0=不可匯出
+```
+
+### Master_Lists
+
+| List_Type | List_Value | Active_Flag |
+|---|---|---:|
+
+說明：
+
+```text
+List_Type     Department / Product_Line / Platform_Line / Work_Category / Health / Status / Role
+List_Value    下拉選單值
+Active_Flag   1=啟用，0=停用
+```
+
+---
+
+## 4. 匯入規則
+
+匯入前系統會檢查：
+
+1. 必要 Sheet 是否存在
+2. 必要欄位是否存在
+3. 主鍵是否重複
+4. Active_Flag / Can_View / Can_Edit / Can_Export 是否為 0 或 1
+5. User_Master.Staff_Name 是否存在於 Staff_Master
+6. User_Master.Department 是否存在於 Master_Lists Department
+7. Role 是否為 Admin / Manager / Staff / PD/PM / Viewer
+8. Page_Name 是否為系統允許頁面
+
+---
+
+## 5. 寫入資料庫規則
+
+Excel 套用後：
+
+```text
+Staff_Master      依 Staff_Name upsert
+User_Master       依 User_Email upsert
+Master_Lists      依 List_Type + List_Value upsert
+Role_Permission   先清空後全量重建
+```
+
+注意：
+
+```text
+Excel 沒列出的 Staff / User / Master List 不會自動刪除。
+要停用請將 Active_Flag 改成 0。
+```
+
+這樣可避免誤刪歷史資料。
+
+---
+
+## 6. Demo Login 預設帳號
 
 | Email | Staff | Department | Role |
 |---|---|---|---|
@@ -51,130 +171,78 @@ py -m streamlit run app.py
 | pdpm@demo.com | 鈴木 | 營業 | PD/PM |
 | viewer@demo.com | JOHN | CS | Viewer |
 
-## 權限邏輯
+---
 
-### Admin
+## 7. 安裝方法
 
-全部頁面、全部資料、全部匯出。
-
-### Manager
-
-依部門限制：
-
-```text
-Department = current_user.Department
+```bash
+pip install -r requirements.txt
 ```
 
-### Staff
+Windows 建議：
 
-依人員限制：
-
-```text
-Staff_Name = current_user.Staff_Name
+```powershell
+py -m pip install -r requirements.txt
 ```
 
-### PD/PM
+---
 
-依案件 Owner 限制：
+## 8. 執行方法
 
-```text
-project_budget_master.Owner = current_user.Staff_Name
+```bash
+streamlit run app.py
 ```
 
-### Viewer
-
-只能查看 Dashboard。
-
-## 頁面權限
-
-| 頁面 | Admin | Manager | Staff | PD/PM | Viewer |
-|---|---:|---:|---:|---:|---:|
-| 預算設定 | ✓ | × | × | ✓ | × |
-| 日報輸入 | ✓ | ✓ | ✓ | ✓ | × |
-| 週報輸入 | ✓ | ✓ | ✓ | ✓ | × |
-| 自由彙整 | ✓ | ✓ | ✓ | ✓ | × |
-| 自動彙整 Dashboard | ✓ | ✓ | ✓ | ✓ | ✓ |
-| 缺漏週報 | ✓ | ✓ | ✓ | ✓ | × |
-| 匯出 Excel | ✓ | ✓ | ✓ | ✓ | × |
-| Master Data | ✓ | × | × | × | × |
-| User Management | ✓ | × | × | × | × |
-
-## Streamlit Cloud 注意事項
-
-此版仍使用 SQLite。  
-適合 Demo 與流程測試，不建議直接當正式多人長期資料庫。
-
-正式運作建議下一階段改成：
-
-```text
-Streamlit + PostgreSQL + Microsoft Entra ID / Google Workspace OIDC
-```
-
-## 重新初始化資料
-
-關閉 Streamlit 後刪除：
-
-```text
-global_weekly_report_demo.db
-```
-
-再重新執行：
+Windows 建議：
 
 ```powershell
 py -m streamlit run app.py
 ```
 
-
 ---
 
-## 11. Admin Data Maintenance
-
-v2 maintenance 版新增：
+## 9. 檔案結構
 
 ```text
-Admin Data Maintenance
+global_weekly_report_demo_v3_excel_admin_config/
+├─ app.py
+├─ database.py
+├─ export_excel.py
+├─ requirements.txt
+├─ README.md
+└─ .gitignore
 ```
 
-此頁面僅 Admin 可見，用於後台修正已輸入資料。
+執行後會自動產生：
 
-功能包含：
-
-1. 編輯 Daily_Worklog
-2. 刪除 Daily_Worklog
-3. 編輯 Weekly_Summary_Input
-4. 刪除 Weekly_Summary_Input
-5. 修改或刪除後自動重建 Weekly_Report_Log
-6. 所有後台修改寫入 Audit_Log
-
-注意：本 Demo 版刪除為 hard delete。正式運作建議改成 Deleted_Flag / Deleted_By / Deleted_At 的 soft delete。
-
+```text
+global_weekly_report_demo.db
+```
 
 ---
 
-## 12. Admin 可編輯 User Management 與 Master Data
+## 10. 部署到 GitHub / Streamlit Cloud
 
-本版追加 Admin 直接維護功能：
+覆蓋你的 repo 後執行：
 
-### User Management
+```powershell
+git add .
+git commit -m "Upgrade to v3 Excel Admin Config"
+git push
+```
 
-Admin 可在 UI 中：
+Streamlit Cloud 會重新部署。
 
-1. 新增 / 更新 User
-2. 編輯既有 User 的 Staff_Name / Department / Role / Active_Flag
-3. 刪除 User
-4. 刪除操作會寫入 Audit_Log
+---
 
-注意：系統不允許刪除目前登入中的 Admin 自己。
+## 11. 注意事項
 
-### Master Data
+本系統仍是 DEMO 版。
 
-Admin 可在 UI 中：
+正式多人使用建議下一階段改為：
 
-1. 新增 / 更新 Staff_Master
-2. 編輯既有 Staff_Master 的 Department / Role / Active_Flag
-3. 刪除未被引用的 Staff_Master
-4. 新增 Master_Lists
-5. 編輯既有 Master_Lists 的 List_Type / List_Value / Active_Flag
-6. 刪除未被引用的 Master_Lists
+```text
+Streamlit + PostgreSQL + Microsoft Entra ID / Google Workspace OIDC
+```
 
-如果 Staff 或 Master List 已經被日報、週報、Project、User 引用，系統會阻止刪除。正式運作建議將 Active_Flag 改為 0，而不是刪除歷史主檔。
+SQLite 適合本機 Demo 或小規模流程測試，不適合作為正式多人長期寫入資料庫。
