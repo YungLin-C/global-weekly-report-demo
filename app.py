@@ -226,7 +226,134 @@ def page_users():
                 try: db.upsert_user(email,sn,dept,role,active,U); st.success("User 已儲存。")
                 except Exception as e: st.error(str(e))
 
-MENU={"預算設定":page_budget,"日報輸入":page_daily,"週報輸入":page_weekly,"自由彙整":page_query,"自動彙整 Dashboard":page_dashboard,"缺漏週報":page_missing,"匯出 Excel":page_export,"Master Data":page_master,"User Management":page_users}
+def page_admin_maintenance():
+    title("Admin Data Maintenance", "Admin 後台維護已輸入的日報與週報紀錄。修改後會自動重建 Weekly_Report_Log 並寫入 Audit_Log。")
+    if U["Role"] != "Admin":
+        st.warning("只有 Admin 可以使用此頁面。")
+        return
+
+    tabs = st.tabs(["Daily Worklog 維護", "Weekly Summary 維護", "Maintenance Audit Log"])
+
+    with tabs[0]:
+        st.subheader("Daily_Worklog 編輯 / 刪除")
+        daily_df = db.qdf("""
+            SELECT Worklog_ID, Work_Date, Report_Week, Staff_Name, Department, Cost_Tracking_ID,
+                   Work_Category, Hours, Work_Content, Created_By, Created_At
+            FROM daily_worklog
+            ORDER BY Created_At DESC
+        """)
+        dfview(daily_df, 320)
+
+        if daily_df.empty:
+            st.info("目前沒有 Daily_Worklog 紀錄。")
+        else:
+            selected_id = st.selectbox("選擇要維護的 Worklog_ID", daily_df["Worklog_ID"].tolist())
+            rec = daily_df[daily_df["Worklog_ID"] == selected_id].iloc[0].to_dict()
+
+            with st.form("admin_daily_edit"):
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    wd = st.date_input("Work_Date", value=date.fromisoformat(str(rec["Work_Date"])))
+                    sn_list = db.staff()["Staff_Name"].tolist()
+                    sn_index = sn_list.index(rec["Staff_Name"]) if rec["Staff_Name"] in sn_list else 0
+                    sn = st.selectbox("Staff_Name", sn_list, index=sn_index)
+                with c2:
+                    cid_list = db.qdf("SELECT Cost_Tracking_ID FROM project_budget_master ORDER BY Cost_Tracking_ID")["Cost_Tracking_ID"].tolist()
+                    cid_index = cid_list.index(rec["Cost_Tracking_ID"]) if rec["Cost_Tracking_ID"] in cid_list else 0
+                    cid = st.selectbox("Cost_Tracking_ID", cid_list, index=cid_index)
+                    cat_list = db.master_values("Work_Category")
+                    cat_index = cat_list.index(rec["Work_Category"]) if rec["Work_Category"] in cat_list else 0
+                    cat = st.selectbox("Work_Category", cat_list, index=cat_index)
+                with c3:
+                    hours = st.number_input("Hours", min_value=0.5, max_value=24.0, value=float(rec["Hours"]), step=0.5)
+                    content = st.text_input("Work_Content", value=str(rec["Work_Content"]), max_chars=100)
+
+                update_submit = st.form_submit_button("更新 Daily Worklog", type="primary")
+                if update_submit:
+                    try:
+                        db.update_daily_worklog(selected_id, wd, sn, cid, cat, hours, content, U)
+                        ok(f"已更新 Daily Worklog：{selected_id}")
+                    except Exception as e:
+                        st.error(str(e))
+
+            with st.expander("刪除此 Daily Worklog"):
+                st.warning("刪除後會移除該筆日報，並重新計算週報彙整。Demo 版為 hard delete。")
+                confirm = st.checkbox(f"我確認要刪除 {selected_id}", key=f"confirm_delete_daily_{selected_id}")
+                if st.button("刪除 Daily Worklog", disabled=not confirm):
+                    try:
+                        db.delete_daily_worklog(selected_id, U)
+                        ok(f"已刪除 Daily Worklog：{selected_id}")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(str(e))
+
+    with tabs[1]:
+        st.subheader("Weekly_Summary_Input 編輯 / 刪除")
+        weekly_df = db.qdf("""
+            SELECT Weekly_Input_ID, Report_Week, Staff_Name, Cost_Tracking_ID,
+                   Weekly_Summary, Next_Week_Target, Health, Created_By, Updated_By, Created_At, Updated_At
+            FROM weekly_summary_input
+            ORDER BY Updated_At DESC, Created_At DESC
+        """)
+        dfview(weekly_df, 320)
+
+        if weekly_df.empty:
+            st.info("目前沒有 Weekly_Summary_Input 紀錄。")
+        else:
+            selected_wsi = st.selectbox("選擇要維護的 Weekly_Input_ID", weekly_df["Weekly_Input_ID"].tolist())
+            rec = weekly_df[weekly_df["Weekly_Input_ID"] == selected_wsi].iloc[0].to_dict()
+
+            with st.form("admin_weekly_edit"):
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    rw = st.text_input("Report_Week", value=str(rec["Report_Week"]))
+                    sn_list = db.staff()["Staff_Name"].tolist()
+                    sn_index = sn_list.index(rec["Staff_Name"]) if rec["Staff_Name"] in sn_list else 0
+                    sn = st.selectbox("Staff_Name", sn_list, index=sn_index, key="admin_weekly_staff")
+                with c2:
+                    cid_list = db.qdf("SELECT Cost_Tracking_ID FROM project_budget_master ORDER BY Cost_Tracking_ID")["Cost_Tracking_ID"].tolist()
+                    cid_index = cid_list.index(rec["Cost_Tracking_ID"]) if rec["Cost_Tracking_ID"] in cid_list else 0
+                    cid = st.selectbox("Cost_Tracking_ID", cid_list, index=cid_index, key="admin_weekly_cost")
+                    health_list = db.master_values("Health")
+                    health_index = health_list.index(rec["Health"]) if rec["Health"] in health_list else 0
+                    health_value = st.selectbox("Health", health_list, index=health_index)
+                with c3:
+                    st.caption("輸入限制：各 500 字以內")
+
+                summary = st.text_area("Weekly_Summary", value=str(rec["Weekly_Summary"]), height=130, max_chars=500)
+                target = st.text_area("Next_Week_Target", value=str(rec["Next_Week_Target"]), height=130, max_chars=500)
+
+                update_weekly = st.form_submit_button("更新 Weekly Summary", type="primary")
+                if update_weekly:
+                    try:
+                        db.update_weekly_summary_input(selected_wsi, rw, sn, cid, summary, target, health_value, U)
+                        ok(f"已更新 Weekly Summary：{selected_wsi}")
+                    except Exception as e:
+                        st.error(str(e))
+
+            with st.expander("刪除此 Weekly Summary"):
+                st.warning("刪除後該週報會變成 Missing Summary，只要對應 Daily Worklog 仍存在。Demo 版為 hard delete。")
+                confirm = st.checkbox(f"我確認要刪除 {selected_wsi}", key=f"confirm_delete_weekly_{selected_wsi}")
+                if st.button("刪除 Weekly Summary", disabled=not confirm):
+                    try:
+                        db.delete_weekly_summary_input(selected_wsi, U)
+                        ok(f"已刪除 Weekly Summary：{selected_wsi}")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(str(e))
+
+    with tabs[2]:
+        st.subheader("Audit_Log")
+        audit_df = db.qdf("""
+            SELECT Audit_ID, User_Email, Action_Type, Table_Name, Record_Key, Old_Value, New_Value, Created_At
+            FROM audit_log
+            ORDER BY Created_At DESC
+            LIMIT 300
+        """)
+        dfview(audit_df, 520)
+
+
+MENU={"預算設定":page_budget,"日報輸入":page_daily,"週報輸入":page_weekly,"自由彙整":page_query,"自動彙整 Dashboard":page_dashboard,"缺漏週報":page_missing,"匯出 Excel":page_export,"Master Data":page_master,"User Management":page_users,"Admin Data Maintenance":page_admin_maintenance}
 
 st.sidebar.title("GLOBAL Weekly Report Demo v2")
 pages=db.allowed_pages(U["Role"])

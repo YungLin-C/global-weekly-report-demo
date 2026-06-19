@@ -30,7 +30,7 @@ DEFAULT_USERS = [
     ("pdpm@demo.com","鈴木","營業","PD/PM",1),
     ("viewer@demo.com","JOHN","CS","Viewer",1),
 ]
-PAGE_ORDER = ["預算設定","日報輸入","週報輸入","自由彙整","自動彙整 Dashboard","缺漏週報","匯出 Excel","Master Data","User Management"]
+PAGE_ORDER = ["預算設定","日報輸入","週報輸入","自由彙整","自動彙整 Dashboard","缺漏週報","匯出 Excel","Master Data","User Management","Admin Data Maintenance"]
 
 def conn():
     c = sqlite3.connect(DB_PATH)
@@ -395,3 +395,134 @@ def upsert_user(email,staff_name,dept,role,active=1,u=None):
     execute("""INSERT INTO user_master VALUES(?,?,?,?,?,?,?) ON CONFLICT(User_Email) DO UPDATE SET Staff_Name=excluded.Staff_Name,Department=excluded.Department,Role=excluded.Role,Active_Flag=excluded.Active_Flag,Updated_At=excluded.Updated_At""",
             [email.strip(),staff_name,dept,role,int(active),n,n])
     audit("UPSERT","user_master",email,"",{"role":role},u["User_Email"] if u else "system")
+
+
+# -----------------------------
+# Admin Data Maintenance helpers
+# -----------------------------
+
+def _admin_only(u):
+    if not u or u.get("Role") != "Admin":
+        raise PermissionError("只有 Admin 可以執行後台資料維護。")
+
+def get_daily_worklog_by_id(worklog_id):
+    df = qdf("SELECT * FROM daily_worklog WHERE Worklog_ID=?", [worklog_id])
+    return None if df.empty else df.iloc[0].to_dict()
+
+def get_weekly_summary_by_id(weekly_input_id):
+    df = qdf("SELECT * FROM weekly_summary_input WHERE Weekly_Input_ID=?", [weekly_input_id])
+    return None if df.empty else df.iloc[0].to_dict()
+
+def update_daily_worklog(worklog_id, work_date, staff_name, cid, cat, hours, content, u=None):
+    _admin_only(u)
+    old = get_daily_worklog_by_id(worklog_id)
+    if not old:
+        raise ValueError("找不到指定 Worklog_ID。")
+    if not staff_name:
+        raise ValueError("Staff_Name 不可為空。")
+    if not cid:
+        raise ValueError("Cost_Tracking_ID 不可為空。")
+    if float(hours) <= 0:
+        raise ValueError("工時不可為 0。")
+    if float(hours) < 0.5 or float(hours) > 24:
+        raise ValueError("工時必須介於 0.5 到 24 小時。")
+    if not content or not content.strip():
+        raise ValueError("Work_Content 不可為空。")
+    if len(content) > 100:
+        raise ValueError("Work_Content 限制 100 字以內。")
+
+    sdf = qdf("SELECT * FROM staff_master WHERE Staff_Name=?", [staff_name])
+    pdf = qdf("SELECT * FROM project_budget_master WHERE Cost_Tracking_ID=?", [cid])
+    if sdf.empty:
+        raise ValueError("人員不存在。")
+    if pdf.empty:
+        raise ValueError("工番號不存在。")
+
+    wd = work_date.strftime("%Y-%m-%d") if hasattr(work_date, "strftime") else str(work_date)
+    rw = get_current_week(wd)
+    user = u["User_Email"] if u else "system"
+
+    execute("""UPDATE daily_worklog
+               SET Work_Date=?, Report_Week=?, Staff_Name=?, Department=?, Cost_Tracking_ID=?,
+                   Work_Category=?, Hours=?, Work_Content=?, Product_Line=?, Platform_Line=?
+               WHERE Worklog_ID=?""",
+            [wd, rw, staff_name, sdf.iloc[0]["Department"], cid,
+             cat, float(hours), content.strip(), pdf.iloc[0]["Product_Line"], pdf.iloc[0]["Platform_Line"],
+             worklog_id])
+
+    rebuild_weekly()
+    audit("ADMIN_UPDATE", "daily_worklog", worklog_id, old, {
+        "Work_Date": wd,
+        "Report_Week": rw,
+        "Staff_Name": staff_name,
+        "Cost_Tracking_ID": cid,
+        "Work_Category": cat,
+        "Hours": hours,
+        "Work_Content": content.strip(),
+    }, user)
+
+def delete_daily_worklog(worklog_id, u=None):
+    _admin_only(u)
+    old = get_daily_worklog_by_id(worklog_id)
+    if not old:
+        raise ValueError("找不到指定 Worklog_ID。")
+    user = u["User_Email"] if u else "system"
+    execute("DELETE FROM daily_worklog WHERE Worklog_ID=?", [worklog_id])
+    rebuild_weekly()
+    audit("ADMIN_DELETE", "daily_worklog", worklog_id, old, "", user)
+
+def update_weekly_summary_input(weekly_input_id, report_week, staff_name, cid, summary, target, health_value, u=None):
+    _admin_only(u)
+    old = get_weekly_summary_by_id(weekly_input_id)
+    if not old:
+        raise ValueError("找不到指定 Weekly_Input_ID。")
+    if not report_week:
+        raise ValueError("Report_Week 不可為空。")
+    if not staff_name:
+        raise ValueError("Staff_Name 不可為空。")
+    if not cid:
+        raise ValueError("Cost_Tracking_ID 不可為空。")
+    if not summary or not summary.strip():
+        raise ValueError("Weekly_Summary 不可為空。")
+    if not target or not target.strip():
+        raise ValueError("Next_Week_Target 不可為空。")
+    if len(summary) > 500:
+        raise ValueError("Weekly_Summary 超過 500 字。")
+    if len(target) > 500:
+        raise ValueError("Next_Week_Target 超過 500 字。")
+
+    user = u["User_Email"] if u else "system"
+    n = now()
+
+    # Avoid duplicate unique key conflict if Admin changes week/staff/cost id.
+    dup = qdf("""SELECT Weekly_Input_ID FROM weekly_summary_input
+                 WHERE Report_Week=? AND Staff_Name=? AND Cost_Tracking_ID=? AND Weekly_Input_ID<>?""",
+              [report_week, staff_name, cid, weekly_input_id])
+    if not dup.empty:
+        raise ValueError("相同 Report_Week + Staff_Name + Cost_Tracking_ID 的週報已存在，無法更新成重複組合。")
+
+    execute("""UPDATE weekly_summary_input
+               SET Report_Week=?, Staff_Name=?, Cost_Tracking_ID=?, Weekly_Summary=?,
+                   Next_Week_Target=?, Health=?, Updated_At=?, Updated_By=?
+               WHERE Weekly_Input_ID=?""",
+            [report_week, staff_name, cid, summary.strip(), target.strip(), health_value, n, user, weekly_input_id])
+
+    rebuild_weekly()
+    audit("ADMIN_UPDATE", "weekly_summary_input", weekly_input_id, old, {
+        "Report_Week": report_week,
+        "Staff_Name": staff_name,
+        "Cost_Tracking_ID": cid,
+        "Weekly_Summary": summary.strip(),
+        "Next_Week_Target": target.strip(),
+        "Health": health_value,
+    }, user)
+
+def delete_weekly_summary_input(weekly_input_id, u=None):
+    _admin_only(u)
+    old = get_weekly_summary_by_id(weekly_input_id)
+    if not old:
+        raise ValueError("找不到指定 Weekly_Input_ID。")
+    user = u["User_Email"] if u else "system"
+    execute("DELETE FROM weekly_summary_input WHERE Weekly_Input_ID=?", [weekly_input_id])
+    rebuild_weekly()
+    audit("ADMIN_DELETE", "weekly_summary_input", weekly_input_id, old, "", user)

@@ -123,3 +123,27 @@ global_weekly_report_demo.db
 ```powershell
 py -m streamlit run app.py
 ```
+
+
+---
+
+## 11. Admin Data Maintenance
+
+v2 maintenance 版新增：
+
+```text
+Admin Data Maintenance
+```
+
+此頁面僅 Admin 可見，用於後台修正已輸入資料。
+
+功能包含：
+
+1. 編輯 Daily_Worklog
+2. 刪除 Daily_Worklog
+3. 編輯 Weekly_Summary_Input
+4. 刪除 Weekly_Summary_Input
+5. 修改或刪除後自動重建 Weekly_Report_Log
+6. 所有後台修改寫入 Audit_Log
+
+注意：本 Demo 版刪除為 hard delete。正式運作建議改成 Deleted_Flag / Deleted_By / Deleted_At 的 soft delete。
