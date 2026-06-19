@@ -395,3 +395,19 @@ def upsert_user(email,staff_name,dept,role,active=1,u=None):
     execute("""INSERT INTO user_master VALUES(?,?,?,?,?,?,?) ON CONFLICT(User_Email) DO UPDATE SET Staff_Name=excluded.Staff_Name,Department=excluded.Department,Role=excluded.Role,Active_Flag=excluded.Active_Flag,Updated_At=excluded.Updated_At""",
             [email.strip(),staff_name,dept,role,int(active),n,n])
     audit("UPSERT","user_master",email,"",{"role":role},u["User_Email"] if u else "system")
+def get_users(active_only=True):
+    sql = "SELECT * FROM user_master"
+    if active_only:
+        sql += " WHERE Active_Flag=1"
+    sql += " ORDER BY Role, User_Email"
+    return query_df(sql)
+
+
+def get_user_by_email(email):
+    df = query_df(
+        "SELECT * FROM user_master WHERE User_Email=? AND Active_Flag=1",
+        [email]
+    )
+    if df.empty:
+        return None
+    return df.iloc[0].to_dict()
