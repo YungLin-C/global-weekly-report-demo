@@ -6,73 +6,6 @@ import database as db
 from export_excel import export_full_workbook, export_query_result
 
 
-APP_VERSION = "v3.1.0-i18n-20260619"
-APP_BUILD = "20260619-001"
-
-LANGUAGES = {
-    "繁體中文": "zh",
-    "日本語": "ja",
-    "English": "en",
-}
-
-PAGE_LABELS = {
-    "預算設定": {"zh": "預算設定", "ja": "予算設定", "en": "Budget Setup"},
-    "日報輸入": {"zh": "日報輸入", "ja": "日報入力", "en": "Daily Worklog"},
-    "週報輸入": {"zh": "週報輸入", "ja": "週報入力", "en": "Weekly Summary"},
-    "自由彙整": {"zh": "自由彙整", "ja": "自由集計", "en": "Flexible Query"},
-    "自動彙整 Dashboard": {"zh": "自動彙整 Dashboard", "ja": "自動集計 Dashboard", "en": "Auto Dashboard"},
-    "缺漏週報": {"zh": "缺漏週報", "ja": "未提出週報", "en": "Missing Weekly Summary"},
-    "匯出 Excel": {"zh": "匯出 Excel", "ja": "Excel 出力", "en": "Export Excel"},
-    "Master Data": {"zh": "Master Data", "ja": "マスターデータ", "en": "Master Data"},
-    "User Management": {"zh": "User Management", "ja": "ユーザー管理", "en": "User Management"},
-    "Admin Data Maintenance": {"zh": "Admin Data Maintenance", "ja": "管理者データ保守", "en": "Admin Data Maintenance"},
-    "Admin Config Import / Export": {"zh": "Admin Config Import / Export", "ja": "管理設定 Import / Export", "en": "Admin Config Import / Export"},
-}
-
-TEXT = {
-    "app_title": {"zh": "GLOBAL Weekly Report Demo", "ja": "GLOBAL 週報管理デモ", "en": "GLOBAL Weekly Report Demo"},
-    "language": {"zh": "語言 / Language", "ja": "言語 / Language", "en": "Language / 語言"},
-    "demo_login": {"zh": "Demo Login / 模擬登入者", "ja": "Demo Login / 模擬ログイン", "en": "Demo Login"},
-    "current_user": {"zh": "目前使用者", "ja": "現在のユーザー", "en": "Current User"},
-    "role": {"zh": "角色", "ja": "権限", "en": "Role"},
-    "department": {"zh": "部門", "ja": "部門", "en": "Department"},
-    "version": {"zh": "版本", "ja": "バージョン", "en": "Version"},
-    "build": {"zh": "流水號", "ja": "ビルド番号", "en": "Build"},
-    "language_note": {
-        "zh": "本版支援中文 / 日文 / 英文頁面名稱與主要操作標籤。資料庫欄位名稱維持英文，便於 Excel 與程式維護。",
-        "ja": "本版は中国語 / 日本語 / 英語のページ名と主要操作ラベルに対応します。Excel とプログラム保守性のため、DB項目名は英語のままです。",
-        "en": "This version supports Chinese / Japanese / English page names and key UI labels. Database field names remain in English for Excel and code maintainability.",
-    },
-    "edit_no_permission": {"zh": "目前角色沒有編輯權限。", "ja": "現在の権限では編集できません。", "en": "Your current role does not have edit permission."},
-    "admin_only": {"zh": "只有 Admin 可以使用此頁面。", "ja": "このページは Admin のみ利用できます。", "en": "This page is available to Admin only."},
-    "export_current_config": {"zh": "下載目前 Admin Config", "ja": "現在の管理設定をダウンロード", "en": t("export_current_config")},
-    "apply_config": {"zh": "套用設定到資料庫", "ja": "設定をデータベースへ適用", "en": t("apply_config")},
-    "validation_passed": {"zh": "Validation 通過，可以套用設定。", "ja": "Validation に合格しました。設定を適用できます。", "en": "Validation passed. You can apply the configuration."},
-    "validation_failed": {"zh": "Validation 失敗", "ja": "Validation 失敗", "en": "Validation failed"},
-    "query_result": {"zh": "查詢結果", "ja": "検索結果", "en": "Query Result"},
-}
-
-def lang_code():
-    return st.session_state.get("lang_code", "zh")
-
-def t(key):
-    return TEXT.get(key, {}).get(lang_code(), TEXT.get(key, {}).get("zh", key))
-
-def page_label(page_key):
-    return PAGE_LABELS.get(page_key, {}).get(lang_code(), page_key)
-
-def reverse_page_label(label):
-    for key, values in PAGE_LABELS.items():
-        if label in values.values():
-            return key
-    return label
-
-def local_title(page_key, caption=None):
-    st.title(page_label(page_key))
-    if caption:
-        st.caption(caption)
-
-
 st.set_page_config(
     page_title="GLOBAL Weekly Report Demo v3",
     page_icon="🗓️",
@@ -111,7 +44,7 @@ def get_current_user():
         st.session_state.demo_user_email = emails[0]
 
     selected = st.sidebar.selectbox(
-        t("demo_login"),
+        "Demo Login / 模擬登入者",
         emails,
         index=emails.index(st.session_state.demo_user_email),
     )
@@ -123,15 +56,6 @@ def get_current_user():
         st.stop()
     return user
 
-
-st.sidebar.markdown("### 🌐 " + t("language"))
-selected_lang_name = st.sidebar.selectbox(
-    "Language",
-    list(LANGUAGES.keys()),
-    index=list(LANGUAGES.values()).index(st.session_state.get("lang_code", "zh")),
-    label_visibility="collapsed",
-)
-st.session_state.lang_code = LANGUAGES[selected_lang_name]
 
 USER = get_current_user()
 
@@ -146,14 +70,11 @@ def can_export(page):
 
 def user_badge():
     st.sidebar.markdown("---")
-    st.sidebar.caption(t("current_user"))
+    st.sidebar.caption("Current User")
     st.sidebar.write(f"**{USER['Staff_Name']}**")
-    st.sidebar.write(f"{t('role')}: **{USER['Role']}**")
-    st.sidebar.write(f"{t('department')}: **{USER['Department']}**")
+    st.sidebar.write(f"Role: **{USER['Role']}**")
+    st.sidebar.write(f"Dept: **{USER['Department']}**")
     st.sidebar.write(USER["User_Email"])
-    st.sidebar.markdown("---")
-    st.sidebar.caption(f"{t('version')}: {APP_VERSION}")
-    st.sidebar.caption(f"{t('build')}: {APP_BUILD}")
 
 
 def scoped_staff_options():
@@ -169,9 +90,9 @@ def scoped_staff_options():
 
 
 def page_budget():
-    local_title("預算設定", "PD/PM 可維護自己 Owner 的案件；Admin 可維護全部。")
+    title("預算設定", "PD/PM 可維護自己 Owner 的案件；Admin 可維護全部。")
     if not can_edit("預算設定"):
-        st.warning(t("edit_no_permission"))
+        st.warning("目前角色沒有編輯權限。")
     product_lines = db.get_master_values("Product_Line")
     platform_lines = db.get_master_values("Platform_Line")
     status_list = db.get_master_values("Status")
@@ -220,9 +141,9 @@ def page_budget():
 
 
 def page_daily():
-    local_title("日報輸入", "單筆輸入每日工時。一筆日報只對應一個 Cost_Tracking_ID。")
+    title("日報輸入", "單筆輸入每日工時。一筆日報只對應一個 Cost_Tracking_ID。")
     if not can_edit("日報輸入"):
-        st.warning(t("edit_no_permission"))
+        st.warning("目前角色沒有編輯權限。")
         return
 
     staff_names = scoped_staff_options()
@@ -264,9 +185,9 @@ def page_daily():
 
 
 def page_weekly():
-    local_title("週報輸入", "每週每人針對有投入工時的 Cost_Tracking_ID 填寫本週總結與下週目標。")
+    title("週報輸入", "每週每人針對有投入工時的 Cost_Tracking_ID 填寫本週總結與下週目標。")
     if not can_edit("週報輸入"):
-        st.warning(t("edit_no_permission"))
+        st.warning("目前角色沒有編輯權限。")
         return
 
     week_options = db.get_week_options()
@@ -302,7 +223,7 @@ def page_weekly():
 
 
 def page_query():
-    local_title("自由彙整", "依權限範圍查詢週報資料。")
+    title("自由彙整", "依權限範圍查詢週報資料。")
     db.rebuild_weekly_report_log()
 
     weeks = sorted(db.get_week_options())
@@ -323,7 +244,7 @@ def page_query():
         cid = st.selectbox("Cost_Tracking_ID", cost_ids)
 
     result = db.get_weekly_report_filtered(start, end, dept, sn, cid, USER)
-    st.subheader(t("query_result"))
+    st.subheader("查詢結果")
     dfview(result, 460)
 
     if can_export("自由彙整"):
@@ -335,7 +256,7 @@ def page_query():
 
 
 def page_dashboard():
-    local_title("自動彙整 Dashboard", "依目前登入角色的資料範圍即時彙整。")
+    title("自動彙整 Dashboard", "依目前登入角色的資料範圍即時彙整。")
     db.rebuild_weekly_report_log()
 
     project = db.get_project_hour_summary(user=USER)
@@ -368,7 +289,7 @@ def page_dashboard():
 
 
 def page_missing():
-    local_title("缺漏週報", "有 Daily Worklog 但尚未提交 Weekly Summary 的項目。")
+    title("缺漏週報", "有 Daily Worklog 但尚未提交 Weekly Summary 的項目。")
     db.rebuild_weekly_report_log()
     missing = db.get_missing_weekly_summary(USER)
     if missing.empty:
@@ -378,7 +299,7 @@ def page_missing():
 
 
 def page_export():
-    local_title("匯出 Excel", "依目前角色權限匯出 workbook。Admin 匯出全量，其餘角色只匯出可見範圍。")
+    title("匯出 Excel", "依目前角色權限匯出 workbook。Admin 匯出全量，其餘角色只匯出可見範圍。")
     if not can_export("匯出 Excel"):
         st.warning("目前角色沒有 Excel 匯出權限。")
         return
@@ -388,7 +309,7 @@ def page_export():
 
 
 def page_master():
-    local_title("Master Data", "Admin 可新增、修改、停用 Master Data。已被歷史資料引用的值建議停用，不建議刪除。")
+    title("Master Data", "Admin 可新增、修改、停用 Master Data。已被歷史資料引用的值建議停用，不建議刪除。")
     if not can_edit("Master Data"):
         st.warning("目前角色沒有 Master Data 編輯權限。")
         return
@@ -514,7 +435,7 @@ def page_master():
 
 
 def page_users():
-    local_title("User Management", "Admin 可新增、修改、停用與刪除 Demo Login 使用者。")
+    title("User Management", "Admin 可新增、修改、停用與刪除 Demo Login 使用者。")
     if not can_edit("User Management"):
         st.warning("目前角色沒有 User Management 編輯權限。")
         return
@@ -588,9 +509,9 @@ def page_users():
 
 
 def page_admin_maintenance():
-    local_title("Admin Data Maintenance", "Admin 後台維護已輸入的日報與週報紀錄。")
+    title("Admin Data Maintenance", "Admin 後台維護已輸入的日報與週報紀錄。")
     if USER["Role"] != "Admin":
-        st.warning(t("admin_only"))
+        st.warning("只有 Admin 可以使用此頁面。")
         return
 
     tabs = st.tabs(["Daily Worklog 維護", "Weekly Summary 維護", "Maintenance Audit Log"])
@@ -696,16 +617,16 @@ def page_admin_maintenance():
 
 
 def page_admin_config():
-    local_title("Admin Config Import / Export", "用一個 Excel 維護人員、帳號、角色權限與 Master Lists。")
+    title("Admin Config Import / Export", "用一個 Excel 維護人員、帳號、角色權限與 Master Lists。")
     if USER["Role"] != "Admin":
-        st.warning(t("admin_only"))
+        st.warning("只有 Admin 可以使用此頁面。")
         return
 
     st.subheader("1. 下載目前 Admin Config Excel")
     st.write("下載目前 Staff_Master / User_Master / Role_Permission / Master_Lists。")
     cfg_name, cfg_data = db.export_admin_config_workbook()
     st.download_button(
-        t("export_current_config"),
+        "Export Current Admin Config",
         data=cfg_data,
         file_name=cfg_name,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -730,15 +651,15 @@ def page_admin_config():
                     dfview(frames[sheet].head(200), 300)
 
             if errors:
-                st.error(t("validation_failed"))
+                st.error("Validation Failed")
                 for err in errors[:50]:
                     st.write(f"- {err}")
                 if len(errors) > 50:
                     st.write(f"... 還有 {len(errors) - 50} 筆錯誤")
             else:
-                st.success(t("validation_passed"))
+                st.success("Validation Passed. 可以套用設定。")
                 confirm = st.checkbox("我確認要將此 Excel 設定套用到資料庫")
-                if st.button(t("apply_config"), type="primary", disabled=not confirm):
+                if st.button("Apply Config to Database", type="primary", disabled=not confirm):
                     try:
                         result = db.apply_admin_config_frames(frames, USER)
                         st.success("Admin Config 已套用。請重新整理頁面或切換 Demo Login 查看新權限。")
@@ -776,17 +697,14 @@ MENU = {
 }
 
 
-st.sidebar.title(t("app_title"))
+st.sidebar.title("GLOBAL Weekly Report Demo v3")
 allowed_pages = db.get_allowed_pages(USER["Role"])
 if not allowed_pages:
     st.error("目前角色沒有任何頁面權限。請用 Admin 調整 role_permission。")
     st.stop()
 
-display_pages = [page_label(p) for p in allowed_pages]
-choice_label = st.sidebar.radio("Menu", display_pages)
-choice = reverse_page_label(choice_label)
-st.sidebar.caption("Local Demo / SQLite / Streamlit")
-st.sidebar.caption(t("language_note"))
+choice = st.sidebar.radio("選單", allowed_pages)
+st.sidebar.caption("Local Demo / SQLite / Streamlit / Excel Admin Config")
 user_badge()
 
 MENU[choice]()
