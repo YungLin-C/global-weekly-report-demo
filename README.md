@@ -147,3 +147,34 @@ Admin Data Maintenance
 6. 所有後台修改寫入 Audit_Log
 
 注意：本 Demo 版刪除為 hard delete。正式運作建議改成 Deleted_Flag / Deleted_By / Deleted_At 的 soft delete。
+
+
+---
+
+## 12. Admin 可編輯 User Management 與 Master Data
+
+本版追加 Admin 直接維護功能：
+
+### User Management
+
+Admin 可在 UI 中：
+
+1. 新增 / 更新 User
+2. 編輯既有 User 的 Staff_Name / Department / Role / Active_Flag
+3. 刪除 User
+4. 刪除操作會寫入 Audit_Log
+
+注意：系統不允許刪除目前登入中的 Admin 自己。
+
+### Master Data
+
+Admin 可在 UI 中：
+
+1. 新增 / 更新 Staff_Master
+2. 編輯既有 Staff_Master 的 Department / Role / Active_Flag
+3. 刪除未被引用的 Staff_Master
+4. 新增 Master_Lists
+5. 編輯既有 Master_Lists 的 List_Type / List_Value / Active_Flag
+6. 刪除未被引用的 Master_Lists
+
+如果 Staff 或 Master List 已經被日報、週報、Project、User 引用，系統會阻止刪除。正式運作建議將 Active_Flag 改為 0，而不是刪除歷史主檔。

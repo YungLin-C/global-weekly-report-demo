@@ -526,3 +526,120 @@ def delete_weekly_summary_input(weekly_input_id, u=None):
     execute("DELETE FROM weekly_summary_input WHERE Weekly_Input_ID=?", [weekly_input_id])
     rebuild_weekly()
     audit("ADMIN_DELETE", "weekly_summary_input", weekly_input_id, old, "", user)
+
+
+# -----------------------------
+# Admin User / Master edit helpers
+# -----------------------------
+
+def update_master_list_value(old_list_type, old_list_value, new_list_type, new_list_value, active_flag=1, u=None):
+    if not u or u.get("Role") != "Admin":
+        raise PermissionError("只有 Admin 可以修改 Master Data。")
+    if not old_list_type or not old_list_value:
+        raise ValueError("請選擇要修改的 Master List。")
+    if not new_list_type or not new_list_value:
+        raise ValueError("List_Type 與 List_Value 不可為空。")
+
+    old = qdf("SELECT * FROM master_lists WHERE List_Type=? AND List_Value=?", [old_list_type, old_list_value])
+    if old.empty:
+        raise ValueError("找不到指定 Master List。")
+
+    duplicate = qdf("""SELECT * FROM master_lists
+                       WHERE List_Type=? AND List_Value=?
+                         AND NOT (List_Type=? AND List_Value=?)""",
+                    [new_list_type, new_list_value.strip(), old_list_type, old_list_value])
+    if not duplicate.empty:
+        raise ValueError("修改後的 List_Type + List_Value 已存在，不能重複。")
+
+    execute("""UPDATE master_lists
+               SET List_Type=?, List_Value=?, Active_Flag=?
+               WHERE List_Type=? AND List_Value=?""",
+            [new_list_type, new_list_value.strip(), int(active_flag), old_list_type, old_list_value])
+
+    audit("ADMIN_UPDATE", "master_lists", f"{old_list_type}:{old_list_value}",
+          old.iloc[0].to_dict(),
+          {"List_Type": new_list_type, "List_Value": new_list_value.strip(), "Active_Flag": int(active_flag)},
+          u["User_Email"])
+
+def delete_master_list_value(list_type, list_value, u=None):
+    if not u or u.get("Role") != "Admin":
+        raise PermissionError("只有 Admin 可以刪除 Master Data。")
+    old = qdf("SELECT * FROM master_lists WHERE List_Type=? AND List_Value=?", [list_type, list_value])
+    if old.empty:
+        raise ValueError("找不到指定 Master List。")
+
+    # Basic reference protection.
+    refs = []
+    if list_type == "Department":
+        if not qdf("SELECT 1 FROM staff_master WHERE Department=? LIMIT 1", [list_value]).empty:
+            refs.append("staff_master.Department")
+        if not qdf("SELECT 1 FROM daily_worklog WHERE Department=? LIMIT 1", [list_value]).empty:
+            refs.append("daily_worklog.Department")
+    if list_type == "Product_Line":
+        if not qdf("SELECT 1 FROM project_budget_master WHERE Product_Line=? LIMIT 1", [list_value]).empty:
+            refs.append("project_budget_master.Product_Line")
+    if list_type == "Platform_Line":
+        if not qdf("SELECT 1 FROM project_budget_master WHERE Platform_Line=? LIMIT 1", [list_value]).empty:
+            refs.append("project_budget_master.Platform_Line")
+    if list_type == "Work_Category":
+        if not qdf("SELECT 1 FROM daily_worklog WHERE Work_Category=? LIMIT 1", [list_value]).empty:
+            refs.append("daily_worklog.Work_Category")
+    if list_type == "Health":
+        if not qdf("SELECT 1 FROM weekly_summary_input WHERE Health=? LIMIT 1", [list_value]).empty:
+            refs.append("weekly_summary_input.Health")
+    if list_type == "Status":
+        if not qdf("SELECT 1 FROM project_budget_master WHERE Status=? LIMIT 1", [list_value]).empty:
+            refs.append("project_budget_master.Status")
+    if list_type == "Role":
+        if not qdf("SELECT 1 FROM user_master WHERE Role=? LIMIT 1", [list_value]).empty:
+            refs.append("user_master.Role")
+
+    if refs:
+        raise ValueError("此 Master Value 已被使用，建議改為 Active_Flag=0，不建議刪除。引用位置：" + ", ".join(refs))
+
+    execute("DELETE FROM master_lists WHERE List_Type=? AND List_Value=?", [list_type, list_value])
+    audit("ADMIN_DELETE", "master_lists", f"{list_type}:{list_value}", old.iloc[0].to_dict(), "", u["User_Email"])
+
+def update_staff_master(staff_name, department, role="Engineer", active_flag=1, u=None):
+    if not u or u.get("Role") != "Admin":
+        raise PermissionError("只有 Admin 可以修改 Staff_Master。")
+    old = qdf("SELECT * FROM staff_master WHERE Staff_Name=?", [staff_name])
+    if old.empty:
+        raise ValueError("找不到指定 Staff_Name。")
+    execute("""UPDATE staff_master
+               SET Department=?, Role=?, Active_Flag=?
+               WHERE Staff_Name=?""",
+            [department, role, int(active_flag), staff_name])
+    audit("ADMIN_UPDATE", "staff_master", staff_name, old.iloc[0].to_dict(),
+          {"Department": department, "Role": role, "Active_Flag": int(active_flag)}, u["User_Email"])
+
+def delete_staff_master(staff_name, u=None):
+    if not u or u.get("Role") != "Admin":
+        raise PermissionError("只有 Admin 可以刪除 Staff_Master。")
+    old = qdf("SELECT * FROM staff_master WHERE Staff_Name=?", [staff_name])
+    if old.empty:
+        raise ValueError("找不到指定 Staff_Name。")
+    refs = []
+    if not qdf("SELECT 1 FROM daily_worklog WHERE Staff_Name=? LIMIT 1", [staff_name]).empty:
+        refs.append("daily_worklog")
+    if not qdf("SELECT 1 FROM weekly_summary_input WHERE Staff_Name=? LIMIT 1", [staff_name]).empty:
+        refs.append("weekly_summary_input")
+    if not qdf("SELECT 1 FROM project_budget_master WHERE Owner=? LIMIT 1", [staff_name]).empty:
+        refs.append("project_budget_master.Owner")
+    if not qdf("SELECT 1 FROM user_master WHERE Staff_Name=? LIMIT 1", [staff_name]).empty:
+        refs.append("user_master")
+    if refs:
+        raise ValueError("此人員已被資料引用，建議改為 Active_Flag=0，不建議刪除。引用位置：" + ", ".join(refs))
+    execute("DELETE FROM staff_master WHERE Staff_Name=?", [staff_name])
+    audit("ADMIN_DELETE", "staff_master", staff_name, old.iloc[0].to_dict(), "", u["User_Email"])
+
+def delete_user(user_email, u=None):
+    if not u or u.get("Role") != "Admin":
+        raise PermissionError("只有 Admin 可以刪除 User。")
+    if user_email == u.get("User_Email"):
+        raise ValueError("不可刪除目前登入中的 Admin 自己。請先切換其他 Admin。")
+    old = qdf("SELECT * FROM user_master WHERE User_Email=?", [user_email])
+    if old.empty:
+        raise ValueError("找不到指定 User。")
+    execute("DELETE FROM user_master WHERE User_Email=?", [user_email])
+    audit("ADMIN_DELETE", "user_master", user_email, old.iloc[0].to_dict(), "", u["User_Email"])

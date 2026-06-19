@@ -180,177 +180,214 @@ def page_export():
     fn,data=export_full_workbook(U)
     st.download_button("下載權限範圍 Excel Workbook",data=data,file_name=fn,mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",type="primary")
 
+
 def page_master():
-    title("Master Data","僅 Admin 可編輯 Master Data。")
-    editable=can_edit("Master Data")
-    tabs=st.tabs(["Staff_Master","Master_Lists","Role_Permission","Audit_Log"])
-    with tabs[0]:
-        dfview(db.table("staff_master"))
-        if editable:
-            with st.form("staff"):
-                c1,c2,c3,c4=st.columns(4)
-                with c1: sn=st.text_input("Staff_Name")
-                with c2: dept=st.selectbox("Department",db.master_values("Department"))
-                with c3: role=st.text_input("Role","Engineer")
-                with c4: active=st.selectbox("Active_Flag",[1,0])
-                if st.form_submit_button("儲存人員"):
-                    try: db.upsert_staff(sn,dept,role,active,U); st.success("人員資料已儲存。")
-                    except Exception as e: st.error(str(e))
-    with tabs[1]:
-        dfview(db.table("master_lists"))
-        if editable:
-            with st.form("ml"):
-                c1,c2=st.columns(2)
-                with c1: lt=st.selectbox("List_Type",["Department","Product_Line","Platform_Line","Work_Category","Health","Status","Role"])
-                with c2: lv=st.text_input("List_Value")
-                if st.form_submit_button("新增清單值"):
-                    try: db.add_master_value(lt,lv,U); st.success("Master List 已新增。")
-                    except Exception as e: st.error(str(e))
-    with tabs[2]: dfview(db.table("role_permission"),520)
-    with tabs[3]: dfview(db.table("audit_log"),520)
-
-def page_users():
-    title("User Management","Demo Login 用帳號與角色管理。僅 Admin 可見。")
-    editable=can_edit("User Management")
-    dfview(db.table("user_master"))
-    if editable:
-        with st.form("user"):
-            staff_df=db.staff(); staffs=staff_df["Staff_Name"].tolist()
-            c1,c2,c3,c4,c5=st.columns(5)
-            with c1: email=st.text_input("User_Email")
-            with c2: sn=st.selectbox("Staff_Name",staffs)
-            with c3: dept=st.selectbox("Department",db.master_values("Department"))
-            with c4: role=st.selectbox("Role",["Admin","Manager","Staff","PD/PM","Viewer"])
-            with c5: active=st.selectbox("Active_Flag",[1,0])
-            if st.form_submit_button("儲存 User",type="primary"):
-                try: db.upsert_user(email,sn,dept,role,active,U); st.success("User 已儲存。")
-                except Exception as e: st.error(str(e))
-
-def page_admin_maintenance():
-    title("Admin Data Maintenance", "Admin 後台維護已輸入的日報與週報紀錄。修改後會自動重建 Weekly_Report_Log 並寫入 Audit_Log。")
-    if U["Role"] != "Admin":
-        st.warning("只有 Admin 可以使用此頁面。")
+    title("Master Data", "Admin 可新增、修改、停用 Master Data。已被歷史資料引用的值建議停用，不建議刪除。")
+    if not can_edit("Master Data"):
+        st.warning("目前角色沒有 Master Data 編輯權限。")
         return
 
-    tabs = st.tabs(["Daily Worklog 維護", "Weekly Summary 維護", "Maintenance Audit Log"])
+    tabs = st.tabs(["Staff_Master", "Master_Lists", "Role_Permission", "Audit_Log"])
 
     with tabs[0]:
-        st.subheader("Daily_Worklog 編輯 / 刪除")
-        daily_df = db.qdf("""
-            SELECT Worklog_ID, Work_Date, Report_Week, Staff_Name, Department, Cost_Tracking_ID,
-                   Work_Category, Hours, Work_Content, Created_By, Created_At
-            FROM daily_worklog
-            ORDER BY Created_At DESC
-        """)
-        dfview(daily_df, 320)
+        st.subheader("Staff_Master")
+        staff_df = db.table("staff_master")
+        dfview(staff_df)
 
-        if daily_df.empty:
-            st.info("目前沒有 Daily_Worklog 紀錄。")
+        st.markdown("### 新增 / 更新人員")
+        with st.form("staff_add_form"):
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                staff_name = st.text_input("Staff_Name")
+            with c2:
+                department = st.selectbox("Department", db.master_values("Department"), key="staff_add_dept")
+            with c3:
+                role = st.text_input("Role", value="Engineer")
+            with c4:
+                active_flag = st.selectbox("Active_Flag", [1, 0], key="staff_add_active")
+            if st.form_submit_button("新增 / 更新人員", type="primary"):
+                try:
+                    db.upsert_staff(staff_name, department, role, active_flag, U)
+                    ok("人員資料已新增 / 更新。")
+                except Exception as e:
+                    st.error(str(e))
+
+        st.markdown("### 編輯既有人員")
+        if staff_df.empty:
+            st.info("目前沒有 Staff_Master 資料。")
         else:
-            selected_id = st.selectbox("選擇要維護的 Worklog_ID", daily_df["Worklog_ID"].tolist())
-            rec = daily_df[daily_df["Worklog_ID"] == selected_id].iloc[0].to_dict()
-
-            with st.form("admin_daily_edit"):
+            selected_staff = st.selectbox("選擇 Staff_Name", staff_df["Staff_Name"].tolist(), key="edit_staff_select")
+            rec = staff_df[staff_df["Staff_Name"] == selected_staff].iloc[0].to_dict()
+            with st.form("staff_edit_form"):
                 c1, c2, c3 = st.columns(3)
                 with c1:
-                    wd = st.date_input("Work_Date", value=date.fromisoformat(str(rec["Work_Date"])))
-                    sn_list = db.staff()["Staff_Name"].tolist()
-                    sn_index = sn_list.index(rec["Staff_Name"]) if rec["Staff_Name"] in sn_list else 0
-                    sn = st.selectbox("Staff_Name", sn_list, index=sn_index)
+                    dept_list = db.master_values("Department")
+                    dept_idx = dept_list.index(rec["Department"]) if rec["Department"] in dept_list else 0
+                    new_dept = st.selectbox("Department", dept_list, index=dept_idx, key="staff_edit_dept")
                 with c2:
-                    cid_list = db.qdf("SELECT Cost_Tracking_ID FROM project_budget_master ORDER BY Cost_Tracking_ID")["Cost_Tracking_ID"].tolist()
-                    cid_index = cid_list.index(rec["Cost_Tracking_ID"]) if rec["Cost_Tracking_ID"] in cid_list else 0
-                    cid = st.selectbox("Cost_Tracking_ID", cid_list, index=cid_index)
-                    cat_list = db.master_values("Work_Category")
-                    cat_index = cat_list.index(rec["Work_Category"]) if rec["Work_Category"] in cat_list else 0
-                    cat = st.selectbox("Work_Category", cat_list, index=cat_index)
+                    new_role = st.text_input("Role", value=str(rec.get("Role") or ""))
                 with c3:
-                    hours = st.number_input("Hours", min_value=0.5, max_value=24.0, value=float(rec["Hours"]), step=0.5)
-                    content = st.text_input("Work_Content", value=str(rec["Work_Content"]), max_chars=100)
-
-                update_submit = st.form_submit_button("更新 Daily Worklog", type="primary")
-                if update_submit:
+                    new_active = st.selectbox("Active_Flag", [1, 0], index=0 if int(rec["Active_Flag"]) == 1 else 1, key="staff_edit_active")
+                if st.form_submit_button("更新既有人員", type="primary"):
                     try:
-                        db.update_daily_worklog(selected_id, wd, sn, cid, cat, hours, content, U)
-                        ok(f"已更新 Daily Worklog：{selected_id}")
+                        db.update_staff_master(selected_staff, new_dept, new_role, new_active, U)
+                        ok(f"已更新 Staff_Master：{selected_staff}")
                     except Exception as e:
                         st.error(str(e))
 
-            with st.expander("刪除此 Daily Worklog"):
-                st.warning("刪除後會移除該筆日報，並重新計算週報彙整。Demo 版為 hard delete。")
-                confirm = st.checkbox(f"我確認要刪除 {selected_id}", key=f"confirm_delete_daily_{selected_id}")
-                if st.button("刪除 Daily Worklog", disabled=not confirm):
+            with st.expander("刪除此人員"):
+                st.warning("若此人員已被日報、週報、Owner 或 User 使用，系統會阻止刪除。建議改為 Active_Flag=0。")
+                confirm = st.checkbox(f"我確認要刪除 {selected_staff}", key=f"confirm_del_staff_{selected_staff}")
+                if st.button("刪除 Staff_Master", disabled=not confirm):
                     try:
-                        db.delete_daily_worklog(selected_id, U)
-                        ok(f"已刪除 Daily Worklog：{selected_id}")
+                        db.delete_staff_master(selected_staff, U)
+                        ok(f"已刪除 Staff_Master：{selected_staff}")
                         st.rerun()
                     except Exception as e:
                         st.error(str(e))
 
     with tabs[1]:
-        st.subheader("Weekly_Summary_Input 編輯 / 刪除")
-        weekly_df = db.qdf("""
-            SELECT Weekly_Input_ID, Report_Week, Staff_Name, Cost_Tracking_ID,
-                   Weekly_Summary, Next_Week_Target, Health, Created_By, Updated_By, Created_At, Updated_At
-            FROM weekly_summary_input
-            ORDER BY Updated_At DESC, Created_At DESC
-        """)
-        dfview(weekly_df, 320)
+        st.subheader("Master_Lists")
+        ml_df = db.table("master_lists")
+        dfview(ml_df)
 
-        if weekly_df.empty:
-            st.info("目前沒有 Weekly_Summary_Input 紀錄。")
+        st.markdown("### 新增 Master List Value")
+        with st.form("ml_add_form"):
+            c1, c2 = st.columns(2)
+            with c1:
+                lt = st.selectbox("List_Type", ["Department", "Product_Line", "Platform_Line", "Work_Category", "Health", "Status", "Role"], key="ml_add_type")
+            with c2:
+                lv = st.text_input("List_Value")
+            if st.form_submit_button("新增清單值", type="primary"):
+                try:
+                    db.add_master(lt, lv, U)
+                    ok("Master List 已新增。")
+                except Exception as e:
+                    st.error(str(e))
+
+        st.markdown("### 編輯 / 停用既有 Master List")
+        if ml_df.empty:
+            st.info("目前沒有 Master_Lists 資料。")
         else:
-            selected_wsi = st.selectbox("選擇要維護的 Weekly_Input_ID", weekly_df["Weekly_Input_ID"].tolist())
-            rec = weekly_df[weekly_df["Weekly_Input_ID"] == selected_wsi].iloc[0].to_dict()
+            display_key = ml_df["List_Type"] + " | " + ml_df["List_Value"]
+            selected_key = st.selectbox("選擇 Master List", display_key.tolist(), key="ml_edit_select")
+            old_type, old_value = selected_key.split(" | ", 1)
+            rec = ml_df[(ml_df["List_Type"] == old_type) & (ml_df["List_Value"] == old_value)].iloc[0].to_dict()
 
-            with st.form("admin_weekly_edit"):
+            with st.form("ml_edit_form"):
                 c1, c2, c3 = st.columns(3)
                 with c1:
-                    rw = st.text_input("Report_Week", value=str(rec["Report_Week"]))
-                    sn_list = db.staff()["Staff_Name"].tolist()
-                    sn_index = sn_list.index(rec["Staff_Name"]) if rec["Staff_Name"] in sn_list else 0
-                    sn = st.selectbox("Staff_Name", sn_list, index=sn_index, key="admin_weekly_staff")
+                    type_options = ["Department", "Product_Line", "Platform_Line", "Work_Category", "Health", "Status", "Role"]
+                    type_idx = type_options.index(old_type) if old_type in type_options else 0
+                    new_type = st.selectbox("List_Type", type_options, index=type_idx, key="ml_edit_type")
                 with c2:
-                    cid_list = db.qdf("SELECT Cost_Tracking_ID FROM project_budget_master ORDER BY Cost_Tracking_ID")["Cost_Tracking_ID"].tolist()
-                    cid_index = cid_list.index(rec["Cost_Tracking_ID"]) if rec["Cost_Tracking_ID"] in cid_list else 0
-                    cid = st.selectbox("Cost_Tracking_ID", cid_list, index=cid_index, key="admin_weekly_cost")
-                    health_list = db.master_values("Health")
-                    health_index = health_list.index(rec["Health"]) if rec["Health"] in health_list else 0
-                    health_value = st.selectbox("Health", health_list, index=health_index)
+                    new_value = st.text_input("List_Value", value=old_value)
                 with c3:
-                    st.caption("輸入限制：各 500 字以內")
-
-                summary = st.text_area("Weekly_Summary", value=str(rec["Weekly_Summary"]), height=130, max_chars=500)
-                target = st.text_area("Next_Week_Target", value=str(rec["Next_Week_Target"]), height=130, max_chars=500)
-
-                update_weekly = st.form_submit_button("更新 Weekly Summary", type="primary")
-                if update_weekly:
+                    old_active = int(rec["Active_Flag"]) if rec.get("Active_Flag") is not None else 1
+                    new_active = st.selectbox("Active_Flag", [1, 0], index=0 if old_active == 1 else 1, key="ml_edit_active")
+                if st.form_submit_button("更新 Master List", type="primary"):
                     try:
-                        db.update_weekly_summary_input(selected_wsi, rw, sn, cid, summary, target, health_value, U)
-                        ok(f"已更新 Weekly Summary：{selected_wsi}")
+                        db.update_master_list_value(old_type, old_value, new_type, new_value, new_active, U)
+                        ok(f"已更新 Master List：{old_type} / {old_value}")
                     except Exception as e:
                         st.error(str(e))
 
-            with st.expander("刪除此 Weekly Summary"):
-                st.warning("刪除後該週報會變成 Missing Summary，只要對應 Daily Worklog 仍存在。Demo 版為 hard delete。")
-                confirm = st.checkbox(f"我確認要刪除 {selected_wsi}", key=f"confirm_delete_weekly_{selected_wsi}")
-                if st.button("刪除 Weekly Summary", disabled=not confirm):
+            with st.expander("刪除此 Master List"):
+                st.warning("若此值已被資料引用，系統會阻止刪除。正式運作建議 Active_Flag=0。")
+                confirm = st.checkbox(f"我確認要刪除 {old_type} / {old_value}", key=f"confirm_del_ml_{old_type}_{old_value}")
+                if st.button("刪除 Master List", disabled=not confirm):
                     try:
-                        db.delete_weekly_summary_input(selected_wsi, U)
-                        ok(f"已刪除 Weekly Summary：{selected_wsi}")
+                        db.delete_master_list_value(old_type, old_value, U)
+                        ok(f"已刪除 Master List：{old_type} / {old_value}")
                         st.rerun()
                     except Exception as e:
                         st.error(str(e))
 
     with tabs[2]:
+        st.subheader("Role_Permission")
+        dfview(db.table("role_permission"), 520)
+        st.info("Role_Permission 目前固定由程式 seed。若要改權限矩陣，建議下一版追加 Role Permission Editor。")
+
+    with tabs[3]:
         st.subheader("Audit_Log")
-        audit_df = db.qdf("""
-            SELECT Audit_ID, User_Email, Action_Type, Table_Name, Record_Key, Old_Value, New_Value, Created_At
-            FROM audit_log
-            ORDER BY Created_At DESC
-            LIMIT 300
-        """)
-        dfview(audit_df, 520)
+        dfview(db.table("audit_log"), 520)
+
+
+
+def page_users():
+    title("User Management", "Admin 可新增、修改、停用與刪除 Demo Login 使用者。")
+    if not can_edit("User Management"):
+        st.warning("目前角色沒有 User Management 編輯權限。")
+        return
+
+    user_df = db.table("user_master")
+    st.subheader("User_Master")
+    dfview(user_df)
+
+    staff_df = db.staff()
+    staff_names = staff_df["Staff_Name"].tolist() if not staff_df.empty else []
+    departments = db.master_values("Department")
+    roles = ["Admin", "Manager", "Staff", "PD/PM", "Viewer"]
+
+    st.markdown("### 新增 / 更新 User")
+    with st.form("user_add_form"):
+        c1, c2, c3, c4, c5 = st.columns(5)
+        with c1:
+            user_email = st.text_input("User_Email")
+        with c2:
+            staff_name = st.selectbox("Staff_Name", staff_names, key="user_add_staff")
+        with c3:
+            department = st.selectbox("Department", departments, key="user_add_dept")
+        with c4:
+            role = st.selectbox("Role", roles, key="user_add_role")
+        with c5:
+            active_flag = st.selectbox("Active_Flag", [1, 0], key="user_add_active")
+        if st.form_submit_button("新增 / 更新 User", type="primary"):
+            try:
+                db.upsert_user(user_email, staff_name, department, role, active_flag, U)
+                ok("User 已新增 / 更新。")
+            except Exception as e:
+                st.error(str(e))
+
+    st.markdown("### 編輯既有 User")
+    if user_df.empty:
+        st.info("目前沒有 User_Master 資料。")
+        return
+
+    selected_email = st.selectbox("選擇 User_Email", user_df["User_Email"].tolist(), key="edit_user_select")
+    rec = user_df[user_df["User_Email"] == selected_email].iloc[0].to_dict()
+
+    with st.form("user_edit_form"):
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            staff_idx = staff_names.index(rec["Staff_Name"]) if rec["Staff_Name"] in staff_names else 0
+            edit_staff = st.selectbox("Staff_Name", staff_names, index=staff_idx, key="user_edit_staff")
+        with c2:
+            dept_idx = departments.index(rec["Department"]) if rec["Department"] in departments else 0
+            edit_dept = st.selectbox("Department", departments, index=dept_idx, key="user_edit_dept")
+        with c3:
+            role_idx = roles.index(rec["Role"]) if rec["Role"] in roles else 0
+            edit_role = st.selectbox("Role", roles, index=role_idx, key="user_edit_role")
+        with c4:
+            edit_active = st.selectbox("Active_Flag", [1, 0], index=0 if int(rec["Active_Flag"]) == 1 else 1, key="user_edit_active")
+
+        if st.form_submit_button("更新既有 User", type="primary"):
+            try:
+                db.upsert_user(selected_email, edit_staff, edit_dept, edit_role, edit_active, U)
+                ok(f"已更新 User：{selected_email}")
+            except Exception as e:
+                st.error(str(e))
+
+    with st.expander("刪除此 User"):
+        st.warning("刪除後此 Demo Login 帳號將無法使用。不可刪除目前登入中的自己。")
+        confirm = st.checkbox(f"我確認要刪除 {selected_email}", key=f"confirm_del_user_{selected_email}")
+        if st.button("刪除 User", disabled=not confirm):
+            try:
+                db.delete_user(selected_email, U)
+                ok(f"已刪除 User：{selected_email}")
+                st.rerun()
+            except Exception as e:
+                st.error(str(e))
 
 
 MENU={"預算設定":page_budget,"日報輸入":page_daily,"週報輸入":page_weekly,"自由彙整":page_query,"自動彙整 Dashboard":page_dashboard,"缺漏週報":page_missing,"匯出 Excel":page_export,"Master Data":page_master,"User Management":page_users,"Admin Data Maintenance":page_admin_maintenance}
