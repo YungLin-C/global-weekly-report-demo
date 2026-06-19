@@ -32,7 +32,7 @@ PAGE_LABELS = {
 TEXT = {
     "app_title": {"zh": "GLOBAL Weekly Report Demo", "ja": "GLOBAL 週報管理デモ", "en": "GLOBAL Weekly Report Demo"},
     "language": {"zh": "語言 / Language", "ja": "言語 / Language", "en": "Language / 語言"},
-    "demo_login": {"zh": t("demo_login"), "ja": "Demo Login / 模擬ログイン", "en": "Demo Login"},
+    "demo_login": {"zh": "Demo Login / 模擬登入者", "ja": "Demo Login / 模擬ログイン", "en": "Demo Login"},
     "current_user": {"zh": "目前使用者", "ja": "現在のユーザー", "en": "Current User"},
     "role": {"zh": "角色", "ja": "権限", "en": "Role"},
     "department": {"zh": "部門", "ja": "部門", "en": "Department"},
