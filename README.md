@@ -246,3 +246,37 @@ Streamlit + PostgreSQL + Microsoft Entra ID / Google Workspace OIDC
 ```
 
 SQLite 適合本機 Demo 或小規模流程測試，不適合作為正式多人長期寫入資料庫。
+
+
+---
+
+## 12. v3.1 多語言 UI 與版本流水號
+
+本版追加：
+
+```text
+繁體中文 / 日本語 / English
+```
+
+側邊欄左上角提供語言選擇：
+
+```text
+語言 / Language
+```
+
+切換後會影響：
+
+1. 左側頁面名稱
+2. App 標題
+3. Demo Login 標籤
+4. 主要權限提示
+5. Admin Config Import / Export 主要操作按鈕
+
+注意：資料庫欄位名稱與 Excel 欄位名稱維持英文，便於程式與 Excel 維護。
+
+側邊欄下方顯示版本流水號：
+
+```text
+Version: v3.1.0-i18n-20260619
+Build: 20260619-001
+```
